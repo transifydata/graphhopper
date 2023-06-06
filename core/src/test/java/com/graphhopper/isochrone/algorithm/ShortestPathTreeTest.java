@@ -352,6 +352,27 @@ public class ShortestPathTreeTest {
         instance1.setDistanceLimit(110.0);
         instance1.search(0, result1::add);
 
+        assertEquals(3, result.size());
+
+
+        assertAll(
+                () -> assertEquals(0.0, result.get(0).distance),
+                () -> assertEquals(40.0, result.get(1).distance),
+                () -> assertEquals(80.0, result.get(2).distance)
+        );
+
+        assertEquals(4, result1.size());
+
+
+        assertAll(
+                () -> assertEquals(0.0, result1.get(0).distance),
+                () -> assertEquals(40.0, result1.get(1).distance),
+                () -> assertEquals(80.0, result1.get(2).distance),
+                () -> assertEquals(120.0, result1.get(3).distance),
+
+                // Consume only 30.0 of this edge, which will bring us to the distance limit = 110.0
+                () -> assertEquals(30.0, result1.get(3).distance_consumed.getAsDouble())
+                );
 
         System.out.println(result);
         System.out.println(result1);
