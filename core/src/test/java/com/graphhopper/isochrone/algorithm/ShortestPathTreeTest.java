@@ -65,6 +65,18 @@ public class ShortestPathTreeTest {
     private final EncodingManager encodingManager = EncodingManager.start().add(accessEnc).add(speedEnc).build();
     private BaseGraph graph;
 
+    private BaseGraph graph1;
+
+
+    private void setup1() {
+        // Make graph 0 --> 1 --> 2 --> 3
+
+        graph1 = new BaseGraph.Builder(encodingManager).create();
+        GHUtility.setSpeed(10, true, false, accessEnc, speedEnc, ((Graph) graph1).edge(0, 1).setDistance(40));
+        GHUtility.setSpeed(10, true, false, accessEnc, speedEnc, ((Graph) graph1).edge(1, 2).setDistance(40));
+        GHUtility.setSpeed(10, true, false, accessEnc, speedEnc, ((Graph) graph1).edge(2, 3).setDistance(40));
+
+    }
 
     @BeforeEach
     public void setUp() {
@@ -97,6 +109,8 @@ public class ShortestPathTreeTest {
 
         GHUtility.setSpeed(20, true, true, accessEnc, speedEnc, ((Graph) graph).edge(6, 7).setDistance(50));
         GHUtility.setSpeed(20, true, true, accessEnc, speedEnc, ((Graph) graph).edge(3, 8).setDistance(25));
+
+        setup1();
     }
 
     private int countDirectedEdges(BaseGraph graph) {
@@ -322,6 +336,25 @@ public class ShortestPathTreeTest {
                 () -> assertEquals(70.0, result.get(4).distance),
                 () -> assertEquals(70.0, result.get(5).distance)
         );
+    }
+
+    @Test
+    public void testSearchByDistance1() {
+        List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
+        List<ShortestPathTree.IsoLabel> result1 = new ArrayList<>();
+        ShortestPathTree instance = new ShortestPathTree(graph1, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
+        instance.setIncludeOverextendedEdges(false);
+        instance.setDistanceLimit(110.0);
+        instance.search(0, result::add);
+
+        ShortestPathTree instance1 = new ShortestPathTree(graph1, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
+        instance1.setIncludeOverextendedEdges(true);
+        instance1.setDistanceLimit(110.0);
+        instance1.search(0, result1::add);
+
+
+        System.out.println(result);
+        System.out.println(result1);
     }
 
 }
