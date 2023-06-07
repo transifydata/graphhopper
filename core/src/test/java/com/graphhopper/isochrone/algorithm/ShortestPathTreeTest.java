@@ -343,6 +343,7 @@ public class ShortestPathTreeTest {
         List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
         List<ShortestPathTree.IsoLabel> result1 = new ArrayList<>();
         ShortestPathTree instance = new ShortestPathTree(graph1, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
+
         instance.setIncludeOverextendedEdges(false);
         instance.setDistanceLimit(110.0);
         instance.search(0, result::add);
@@ -371,7 +372,7 @@ public class ShortestPathTreeTest {
                 () -> assertEquals(120.0, result1.get(3).distance),
 
                 // Consume only 30.0 of this edge, which will bring us to the distance limit = 110.0
-                () -> assertEquals(30.0, result1.get(3).distance_consumed.getAsDouble())
+                () -> assertEquals(30.0, result1.get(3).consumed_part.getAsDouble())
                 );
 
         System.out.println(result);

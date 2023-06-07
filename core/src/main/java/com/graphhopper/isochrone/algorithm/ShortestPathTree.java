@@ -63,7 +63,10 @@ public class ShortestPathTree extends AbstractRoutingAlgorithm {
         }
 
         public boolean deleted = false;
-        public OptionalDouble distance_consumed = OptionalDouble.empty();
+
+        // How much of the edge is consumed
+        // In cases where an edge exceeds the limit, then consumed will be less than edge length
+        public OptionalDouble consumed_part = OptionalDouble.empty();
         public int node;
         public int edge;
         public double weight;
@@ -79,7 +82,7 @@ public class ShortestPathTree extends AbstractRoutingAlgorithm {
                     ", weight=" + weight +
                     ", time=" + time +
                     ", distance=" + distance +
-                    ", consumed=" + distance_consumed +
+                    ", consumed=" + consumed_part +
                     '}';
         }
     }
@@ -109,6 +112,7 @@ public class ShortestPathTree extends AbstractRoutingAlgorithm {
     public void setIncludeOverextendedEdges(boolean over) {
         this.includeOverextendedEdges = over;
     }
+
     /**
      * Time limit in milliseconds
      */
@@ -166,8 +170,7 @@ public class ShortestPathTree extends AbstractRoutingAlgorithm {
                         queueByWeighting.add(label);
                     } else if (includeOverextendedEdges) {
                         // Overextended case
-                        double overextension = limit - getExploreValue(currentLabel);
-                        label.distance_consumed = OptionalDouble.of(overextension);
+                        label.consumed_part = OptionalDouble.of(limit - getExploreValue(currentLabel));
                         consumer.accept(label);
                     }
                 } else if (label.weight > nextWeight) {
@@ -177,11 +180,13 @@ public class ShortestPathTree extends AbstractRoutingAlgorithm {
                     if (getExploreValue(label) <= limit) {
                         queueByWeighting.add(label);
                     } else if (includeOverextendedEdges) {
-                        double overextension = limit - getExploreValue(currentLabel);
-                        label.distance_consumed = OptionalDouble.of(overextension);
+                        // Overextended case
+                        label.consumed_part = OptionalDouble.of(limit - getExploreValue(currentLabel));
                         consumer.accept(label);
                     }
                 }
+
+
             }
         }
     }

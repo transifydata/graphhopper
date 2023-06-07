@@ -52,6 +52,7 @@ public class SPTResource {
         public int timeMillis, prevTimeMillis;
         public int distance, prevDistance;
         public GHPoint coordinate, prevCoordinate;
+        public OptionalDouble consumed_part;
     }
 
     private final GraphHopper graphHopper;
@@ -76,7 +77,8 @@ public class SPTResource {
             @QueryParam("point") @NotNull GHPointParam point,
             @QueryParam("columns") String columnsParam,
             @QueryParam("time_limit") @DefaultValue("600") OptionalLong timeLimitInSeconds,
-            @QueryParam("distance_limit") @DefaultValue("-1") OptionalLong distanceInMeter) {
+            @QueryParam("distance_limit") @DefaultValue("-1") OptionalLong distanceInMeter,
+            @QueryParam("include_overextended_edges") @DefaultValue("false") boolean includeOverextended) {
         StopWatch sw = new StopWatch().start();
         PMap hintsMap = new PMap();
         RouteResource.initHints(hintsMap, uriInfo.getQueryParameters());
@@ -102,6 +104,7 @@ public class SPTResource {
         NodeAccess nodeAccess = queryGraph.getNodeAccess();
         TraversalMode traversalMode = profile.isTurnCosts() ? EDGE_BASED : NODE_BASED;
         ShortestPathTree shortestPathTree = new ShortestPathTree(queryGraph, queryGraph.wrapWeighting(weighting), reverseFlow, traversalMode);
+        shortestPathTree.setIncludeOverextendedEdges(includeOverextended);
 
         if (distanceInMeter.orElseThrow(() -> new IllegalArgumentException("query param distance_limit is not a number.")) > 0) {
             shortestPathTree.setDistanceLimit(distanceInMeter.getAsLong());
@@ -181,6 +184,9 @@ public class SPTResource {
                             case "prev_latitude":
                                 sb.append(label.prevCoordinate == null ? null : Helper.round6(label.prevCoordinate.lat));
                                 continue;
+                            case "consumed_part":
+                                sb.append(label.consumed_part.orElse(0));
+                                continue;
                         }
 
                         if (!EdgeIterator.Edge.isValid(label.edgeId))
@@ -238,6 +244,7 @@ public class SPTResource {
         isoLabelWC.timeMillis = Math.round(label.time);
         isoLabelWC.distance = (int) Math.round(label.distance);
         isoLabelWC.edgeId = label.edge;
+        isoLabelWC.consumed_part = label.consumed_part;
         if (label.parent != null) {
             ShortestPathTree.IsoLabel prevLabel = label.parent;
             int prevNodeId = prevLabel.node;
