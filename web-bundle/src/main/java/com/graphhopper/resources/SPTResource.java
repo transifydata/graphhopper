@@ -4,6 +4,7 @@ import com.graphhopper.GraphHopper;
 import com.graphhopper.config.Profile;
 import com.graphhopper.http.GHPointParam;
 import com.graphhopper.http.ProfileResolver;
+import com.graphhopper.isochrone.algorithm.PillarEdgeResolver;
 import com.graphhopper.isochrone.algorithm.ShortestPathTree;
 import com.graphhopper.routing.ev.*;
 import com.graphhopper.routing.querygraph.QueryGraph;
@@ -32,6 +33,7 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.util.*;
+import java.util.function.Consumer;
 
 import static com.graphhopper.resources.RouteResource.removeLegacyParameters;
 import static com.graphhopper.routing.util.TraversalMode.EDGE_BASED;
@@ -52,6 +54,7 @@ public class SPTResource {
         public int timeMillis, prevTimeMillis;
         public int distance, prevDistance;
         public GHPoint coordinate, prevCoordinate;
+        public double consumed_part;
     }
 
     private final GraphHopper graphHopper;
@@ -77,6 +80,8 @@ public class SPTResource {
             @QueryParam("columns") String columnsParam,
             @QueryParam("time_limit") @DefaultValue("600") OptionalLong timeLimitInSeconds,
             @QueryParam("distance_limit") @DefaultValue("-1") OptionalLong distanceInMeter) {
+
+        boolean fullyExpandPillarNodes = true;
         StopWatch sw = new StopWatch().start();
         PMap hintsMap = new PMap();
         RouteResource.initHints(hintsMap, uriInfo.getQueryParameters());
@@ -136,8 +141,7 @@ public class SPTResource {
                 }
                 sb.append(LINE_SEP);
                 writer.write(sb.toString());
-                shortestPathTree.search(snap.getClosestNode(), l -> {
-                    IsoLabelWithCoordinates label = isoLabelWithCoordinates(nodeAccess, l);
+                Consumer<IsoLabelWithCoordinates> isoLabelConsumer = label -> {
                     sb.setLength(0);
                     for (int colIndex = 0; colIndex < columns.size(); colIndex++) {
                         String col = columns.get(colIndex);
@@ -181,6 +185,9 @@ public class SPTResource {
                             case "prev_latitude":
                                 sb.append(label.prevCoordinate == null ? null : Helper.round6(label.prevCoordinate.lat));
                                 continue;
+                            case "consumed_part":
+                                sb.append(label.consumed_part);
+                                continue;
                         }
 
                         if (!EdgeIterator.Edge.isValid(label.edgeId))
@@ -218,7 +225,24 @@ public class SPTResource {
                     } catch (IOException ex) {
                         throw new RuntimeException(ex);
                     }
-                });
+                };
+
+                if (fullyExpandPillarNodes) {
+                    PillarEdgeResolver pillarEdgeResolver = new PillarEdgeResolver(l -> {
+                        IsoLabelWithCoordinates label = isoLabelWithCoordinates(nodeAccess, l.original_label);
+
+                        // TODO: make sure node/adj_node is correct for coord/prevCoord
+                        label.coordinate = l.node;
+                        label.prevCoordinate = l.prev_node;
+                        isoLabelConsumer.accept(label);
+                    }, graph);
+                    shortestPathTree.search(snap.getClosestNode(), pillarEdgeResolver);
+                } else {
+                    shortestPathTree.search(snap.getClosestNode(), l -> {
+                        IsoLabelWithCoordinates label = isoLabelWithCoordinates(nodeAccess, l);
+                        isoLabelConsumer.accept(label);
+                    });
+                }
 
                 logger.info("took: " + sw.stop().getSeconds() + ", visited nodes:" + shortestPathTree.getVisitedNodes() + ", " + uriInfo.getQueryParameters());
             } catch (IOException e) {
@@ -238,6 +262,7 @@ public class SPTResource {
         isoLabelWC.timeMillis = Math.round(label.time);
         isoLabelWC.distance = (int) Math.round(label.distance);
         isoLabelWC.edgeId = label.edge;
+        isoLabelWC.consumed_part = label.consumed_part;
         if (label.parent != null) {
             ShortestPathTree.IsoLabel prevLabel = label.parent;
             int prevNodeId = prevLabel.node;

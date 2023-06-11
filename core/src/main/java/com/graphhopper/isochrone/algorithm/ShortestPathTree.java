@@ -66,7 +66,7 @@ public class ShortestPathTree extends AbstractRoutingAlgorithm {
 
         // How much of the edge is consumed
         // In cases where an edge exceeds the limit, then consumed will be less than edge length
-        public OptionalDouble consumed_part = OptionalDouble.empty();
+        public double consumed_part = 0;
         public int node;
         public int edge;
         public double weight;
@@ -168,11 +168,12 @@ public class ShortestPathTree extends AbstractRoutingAlgorithm {
                     fromMap.put(nextTraversalId, label);
                     if (getExploreValue(label) <= limit) {
                         queueByWeighting.add(label);
+                        label.consumed_part = iter.getDistance();
                     } else if (includeOverextendedEdges) {
                         // Overextended case
                         double consumed = limit - getExploreValue(currentLabel);
                         if (consumed > 0) {
-                            label.consumed_part = OptionalDouble.of(consumed);
+                            label.consumed_part = consumed;
                             consumer.accept(label);
                         }
                     }
@@ -182,11 +183,12 @@ public class ShortestPathTree extends AbstractRoutingAlgorithm {
                     fromMap.put(nextTraversalId, label);
                     if (getExploreValue(label) <= limit) {
                         queueByWeighting.add(label);
+                        label.consumed_part = iter.getDistance();
                     } else if (includeOverextendedEdges) {
                         // Overextended case
                         double consumed = limit - getExploreValue(currentLabel);
                         if (consumed > 0) {
-                            label.consumed_part = OptionalDouble.of(consumed);
+                            label.consumed_part = consumed;
                             consumer.accept(label);
                         }
                     }
