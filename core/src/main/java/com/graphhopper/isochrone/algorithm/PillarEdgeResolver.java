@@ -8,15 +8,20 @@ import com.graphhopper.util.shapes.GHPoint3D;
 
 import java.util.function.Consumer;
 
+/**
+ * This class takes IsoLabel's as produced by ShortestPathTree, and produces the full edge geometry (
+ * including pillar nodes) for each IsoLabel. This results in more edges being returned with more accurate
+ * edge geometry, especially for curved roads with few intersections.
+ */
 public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
     Consumer<IsoLabel> consumer;
     Graph graph;
 
     public static class IsoLabel {
         public ShortestPathTree.IsoLabel original_label;
-        public GHPoint3D node, prev_node;
+        public GHPoint node, prev_node;
 
-        IsoLabel(ShortestPathTree.IsoLabel original_label, GHPoint3D node, GHPoint3D prev_node) {
+        IsoLabel(ShortestPathTree.IsoLabel original_label, GHPoint node, GHPoint prev_node) {
             this.original_label = original_label;
             this.node = node;
             this.prev_node = prev_node;
@@ -36,16 +41,29 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
     void assertEquals(double a, double b) {
         assert Math.abs(a - b) < 0.001;
     }
+
     @Override
     public void accept(ShortestPathTree.IsoLabel label) {
-        if (label.edge == -1 || label.edge >= graph.getEdges()) return;
+        NodeAccess na = graph.getNodeAccess();
+
+
+        if (label.edge == -1 || label.edge >= graph.getEdges()) {
+            GHPoint point;
+            if (na.is3D())
+                point = new GHPoint3D(na.getLat(label.node), na.getLon(label.node), na.getEle(label.node));
+            else point = new GHPoint(na.getLat(label.node), na.getLon(label.node));
+
+
+            IsoLabel this_label = new IsoLabel(label, point, null);
+            this.consumer.accept(this_label);
+            return;
+        }
         EdgeIteratorState edge = graph.getEdgeIteratorState(label.edge, label.node);
 
         double allowed_distance = label.consumed_part;
         double consumed_distance = 0;
 
         PointList geom = edge.fetchWayGeometry(FetchMode.ALL);
-        NodeAccess na = graph.getNodeAccess();
 
         GHPoint3D prev_element = null;
         ShortestPathTree.IsoLabel parent_label = label;
@@ -91,7 +109,7 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
             prev_element = element;
         }
 
-        assert Math.abs(allowed_distance - consumed_distance) < 0.5: String.valueOf(allowed_distance) + " " + String.valueOf(consumed_distance);
+        assert Math.abs(allowed_distance - consumed_distance) < 0.5 : String.valueOf(allowed_distance) + " " + String.valueOf(consumed_distance);
     }
 
 

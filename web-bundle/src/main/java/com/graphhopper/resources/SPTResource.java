@@ -79,9 +79,9 @@ public class SPTResource {
             @QueryParam("point") @NotNull GHPointParam point,
             @QueryParam("columns") String columnsParam,
             @QueryParam("time_limit") @DefaultValue("600") OptionalLong timeLimitInSeconds,
-            @QueryParam("distance_limit") @DefaultValue("-1") OptionalLong distanceInMeter) {
-
-        boolean fullyExpandPillarNodes = true;
+            @QueryParam("distance_limit") @DefaultValue("-1") OptionalLong distanceInMeter,
+            @QueryParam("keep_all_edges") @DefaultValue("false") boolean keepAllEdges
+            ) {
         StopWatch sw = new StopWatch().start();
         PMap hintsMap = new PMap();
         RouteResource.initHints(hintsMap, uriInfo.getQueryParameters());
@@ -227,7 +227,7 @@ public class SPTResource {
                     }
                 };
 
-                if (fullyExpandPillarNodes) {
+                if (keepAllEdges) {
                     PillarEdgeResolver pillarEdgeResolver = new PillarEdgeResolver(l -> {
                         IsoLabelWithCoordinates label = isoLabelWithCoordinates(nodeAccess, l.original_label);
 
