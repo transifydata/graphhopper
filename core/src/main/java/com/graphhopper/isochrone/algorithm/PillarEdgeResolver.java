@@ -48,14 +48,15 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
 
 
         if (label.edge == -1 || label.edge >= graph.getEdges()) {
-            GHPoint point;
-            if (na.is3D())
-                point = new GHPoint3D(na.getLat(label.node), na.getLon(label.node), na.getEle(label.node));
-            else point = new GHPoint(na.getLat(label.node), na.getLon(label.node));
+            if (label.node < graph.getNodes()) {
+                GHPoint point;
+                if (na.is3D())
+                    point = new GHPoint3D(na.getLat(label.node), na.getLon(label.node), na.getEle(label.node));
+                else point = new GHPoint(na.getLat(label.node), na.getLon(label.node));
 
-
-            IsoLabel this_label = new IsoLabel(label, point, null);
-            this.consumer.accept(this_label);
+                IsoLabel this_label = new IsoLabel(label, point, null);
+                this.consumer.accept(this_label);
+            }
             return;
         }
         EdgeIteratorState edge = graph.getEdgeIteratorState(label.edge, label.node);
