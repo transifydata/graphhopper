@@ -80,8 +80,8 @@ public class SPTResource {
             @QueryParam("columns") String columnsParam,
             @QueryParam("time_limit") @DefaultValue("600") OptionalLong timeLimitInSeconds,
             @QueryParam("distance_limit") @DefaultValue("-1") OptionalLong distanceInMeter,
-            @QueryParam("keep_all_edges") @DefaultValue("false") boolean keepAllEdges
-            ) {
+            @QueryParam("keep_all_edges") @DefaultValue("false") boolean keepAllEdges,
+            @QueryParam("include_overextended_edges") @DefaultValue("false") boolean includeOverextended) {
         StopWatch sw = new StopWatch().start();
         PMap hintsMap = new PMap();
         RouteResource.initHints(hintsMap, uriInfo.getQueryParameters());
@@ -107,6 +107,7 @@ public class SPTResource {
         NodeAccess nodeAccess = queryGraph.getNodeAccess();
         TraversalMode traversalMode = profile.isTurnCosts() ? EDGE_BASED : NODE_BASED;
         ShortestPathTree shortestPathTree = new ShortestPathTree(queryGraph, queryGraph.wrapWeighting(weighting), reverseFlow, traversalMode);
+        shortestPathTree.setIncludeOverextendedEdges(includeOverextended);
 
         if (distanceInMeter.orElseThrow(() -> new IllegalArgumentException("query param distance_limit is not a number.")) > 0) {
             shortestPathTree.setDistanceLimit(distanceInMeter.getAsLong());
