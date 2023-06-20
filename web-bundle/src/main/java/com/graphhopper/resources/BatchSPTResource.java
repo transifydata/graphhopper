@@ -42,8 +42,6 @@ public class BatchSPTResource {
         this.profileResolver = profileResolver;
     }
 
-    // Annotating this as application/json because errors come out as json, and
-    // IllegalArgumentExceptions are not mapped to a fixed mediatype, because in RouteResource, it could be GPX.
     @POST
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
@@ -52,10 +50,7 @@ public class BatchSPTResource {
             BatchSPTRequest request,
             @QueryParam("profile") String profileName,
             @QueryParam("reverse_flow") @DefaultValue("false") boolean reverseFlow,
-            @QueryParam("columns") String columnsParam,
-            @QueryParam("time_limit") @DefaultValue("600") OptionalLong timeLimitInSeconds,
             @QueryParam("distance_limit") @DefaultValue("-1") OptionalLong distanceInMeter,
-            @QueryParam("keep_all_edges") @DefaultValue("true") boolean keepAllEdges,
             @QueryParam("include_overextended_edges") @DefaultValue("true") boolean includeOverextended,
             @QueryParam("calculate_buffer_distance") OptionalDouble calculateBufferDistance
     ) {
@@ -81,7 +76,6 @@ public class BatchSPTResource {
         BooleanEncodedValue inSubnetworkEnc = graphHopper.getEncodingManager().getBooleanEncodedValue(Subnetwork.key(profileName));
 
         List<PointList> edges = new ArrayList<>(request.points.size());
-        List<ShortestPathTree.IsoLabel> labels = new ArrayList<>(request.points.size());
 
         for (GHPoint point : request.points) {
             double lat = point.lat;
@@ -100,37 +94,34 @@ public class BatchSPTResource {
             if (distanceInMeter.orElseThrow(() -> new IllegalArgumentException("query param distance_limit is not a number.")) > 0) {
                 shortestPathTree.setDistanceLimit(distanceInMeter.getAsLong());
             } else {
-                double limit = timeLimitInSeconds.orElseThrow(() -> new IllegalArgumentException("query param time_limit is not a number.")) * 1000d;
-                shortestPathTree.setTimeLimit(limit);
+                throw new RuntimeException("distance_limit must not be null and be greater than 0");
             }
 
 
             PillarEdgeResolver pillarEdgeResolver = new PillarEdgeResolver(l -> {
                 edges.add(l.pl);
-                labels.add(l.original_label);
             }, graph);
             shortestPathTree.search(snap.getClosestNode(), pillarEdgeResolver);
         }
 
 
 
-        Object response = null;
+        Object response;
         if (calculateBufferDistance.isPresent()) {
             EdgeBuffering eb = new EdgeBuffering(edges);
-            String buffered = eb.buildEdgeBufferGeoJSON(calculateBufferDistance.getAsDouble());
             // Give media type explicitly since we are annotating CSV and JSON, because error messages are JSON.
-            response = buffered;
+            response = eb.buildEdgeBufferGeoJSON(calculateBufferDistance.getAsDouble());
         } else {
             // Just return the edges
             // Columns we want are: prev_latitude, prev_longitude, latitude, longitude
             // Build an array with these columns for each IsoLabel
             List<double[]> rows = new ArrayList<>();
 
-            for (int i = 0; i < edges.size(); i++) {
-                PointList pointList = edges.get(i);
+            for (PointList pointList : edges) {
                 GHPoint prev_point = null;
                 for (GHPoint point : pointList) {
-                    if (prev_point != null) rows.add(new double[]{prev_point.lat, prev_point.lon, point.lat, point.lon});
+                    if (prev_point != null)
+                        rows.add(new double[]{prev_point.lat, prev_point.lon, point.lat, point.lon});
                     prev_point = point;
                 }
             }
