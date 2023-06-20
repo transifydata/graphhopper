@@ -228,22 +228,11 @@ public class SPTResource {
                     }
                 };
 
-                if (keepAllEdges) {
-                    PillarEdgeResolver pillarEdgeResolver = new PillarEdgeResolver(l -> {
-                        IsoLabelWithCoordinates label = isoLabelWithCoordinates(nodeAccess, l.original_label);
 
-                        // TODO: make sure node/adj_node is correct for coord/prevCoord
-                        label.coordinate = l.node;
-                        label.prevCoordinate = l.prev_node;
-                        isoLabelConsumer.accept(label);
-                    }, graph);
-                    shortestPathTree.search(snap.getClosestNode(), pillarEdgeResolver);
-                } else {
-                    shortestPathTree.search(snap.getClosestNode(), l -> {
-                        IsoLabelWithCoordinates label = isoLabelWithCoordinates(nodeAccess, l);
-                        isoLabelConsumer.accept(label);
-                    });
-                }
+                shortestPathTree.search(snap.getClosestNode(), l -> {
+                    IsoLabelWithCoordinates label = isoLabelWithCoordinates(nodeAccess, l);
+                    isoLabelConsumer.accept(label);
+                });
 
                 logger.info("took: " + sw.stop().getSeconds() + ", visited nodes:" + shortestPathTree.getVisitedNodes() + ", " + uriInfo.getQueryParameters());
             } catch (IOException e) {

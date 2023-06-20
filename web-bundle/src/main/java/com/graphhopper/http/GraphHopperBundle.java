@@ -302,6 +302,7 @@ public class GraphHopperBundle implements ConfiguredBundle<GraphHopperBundleConf
             environment.jersey().register(PtRedirectFilter.class);
         }
         environment.jersey().register(SPTResource.class);
+        environment.jersey().register(BatchSPTResource.class);
         environment.jersey().register(I18NResource.class);
         environment.jersey().register(InfoResource.class);
         environment.healthChecks().register("graphhopper", new GraphHopperHealthCheck(graphHopper));

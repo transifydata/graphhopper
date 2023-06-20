@@ -19,17 +19,16 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
 
     public static class IsoLabel {
         public ShortestPathTree.IsoLabel original_label;
-        public GHPoint node, prev_node;
+        public PointList pl;
 
-        IsoLabel(ShortestPathTree.IsoLabel original_label, GHPoint node, GHPoint prev_node) {
+        IsoLabel(PointList pl, ShortestPathTree.IsoLabel original_label) {
             this.original_label = original_label;
-            this.node = node;
-            this.prev_node = prev_node;
+            this.pl = pl;
         }
 
         @Override
         public String toString() {
-            return "PER.IsoLabel{" + original_label + ", " + node + ", " + prev_node + "} ";
+            return "PER.IsoLabel{" + original_label + ", " + pl + "} ";
         }
     }
 
@@ -54,20 +53,22 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
                     point = new GHPoint3D(na.getLat(label.node), na.getLon(label.node), na.getEle(label.node));
                 else point = new GHPoint(na.getLat(label.node), na.getLon(label.node));
 
-                IsoLabel this_label = new IsoLabel(label, point, null);
-                this.consumer.accept(this_label);
+                PointList pl = new PointList();
+                pl.add(point);
+                IsoLabel this_label = new IsoLabel(pl, label);
             }
             return;
         }
         EdgeIteratorState edge = graph.getEdgeIteratorState(label.edge, label.node);
 
-        double allowed_distance = label.consumed_part;
+        final double allowed_distance = label.consumed_part;
         double consumed_distance = 0;
 
-        PointList geom = edge.fetchWayGeometry(FetchMode.ALL);
+        if (allowed_distance < 0.005) {
+            return;
+        }
 
-        GHPoint3D prev_element = null;
-        ShortestPathTree.IsoLabel parent_label = label;
+        PointList geom = edge.fetchWayGeometry(FetchMode.ALL);
 
 
         assertEquals(geom.getLat(0), na.getLat(label.parent.node));
@@ -76,41 +77,45 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
         assertEquals(geom.getLon(geom.size() - 1), na.getLon(label.node));
 
 
-        for (GHPoint3D element : geom) {
-            if (Math.abs(consumed_distance - allowed_distance) < 0.01) break;
+        assert (DistanceCalcEarth.calcDistance(geom, geom.is3D()) + 1.0 >= allowed_distance);
 
-            if (prev_element != null) {
-                double this_distance = DistanceCalcEarth.DIST_EARTH.calcDist3D(element.lat, element.lon, element.ele, prev_element.lat, prev_element.lon, prev_element.ele);
-
-                if (consumed_distance + this_distance > allowed_distance) {
-                    // Consuming this edge will bring us over the limit
-                    // Have to interpolate along element/prev_element by (allowed_distance - consumed_distance) amount units
-                    double additional_distance = allowed_distance - consumed_distance;
-                    double fraction_distance = additional_distance / this_distance;
-
-                    GHPoint intermediate_2d = DistanceCalcEarth.DIST_EARTH.intermediatePoint(fraction_distance, prev_element.lat, prev_element.lon, element.lat, element.lon);
-
-                    // Copy elevation to 3d point
-                    GHPoint3D intermediate = new GHPoint3D(intermediate_2d.lat, intermediate_2d.lon, element.ele);
-                    element = intermediate;
-                    consumed_distance += additional_distance;
-                } else {
-                    consumed_distance += this_distance;
-                }
-
-
-                ShortestPathTree.IsoLabel spt_isolabel = new ShortestPathTree.IsoLabel(label.node, label.edge, label.weight, label.time, label.parent.distance + consumed_distance, parent_label);
-                spt_isolabel.consumed_part = this_distance;
-                IsoLabel this_label = new IsoLabel(spt_isolabel, element, prev_element);
-                parent_label = spt_isolabel;
-
-                this.consumer.accept(this_label);
+        for (int i = 1; i < geom.size(); i++) {
+            GHPoint3D prev_element = geom.get(i - 1);
+            GHPoint3D element = geom.get(i);
+            if (Math.abs(consumed_distance - allowed_distance) < 0.01) {
+                // Delete the remaining PointList elements
+                geom.trimToSize(i);
+                break;
             }
 
-            prev_element = element;
+            double this_distance = DistanceCalcEarth.DIST_EARTH.calcDist3D(element.lat, element.lon, element.ele, prev_element.lat, prev_element.lon, prev_element.ele);
+
+            if (consumed_distance + this_distance > allowed_distance) {
+                // Consuming this edge will bring us over the limit
+                // Have to interpolate along element/prev_element by (allowed_distance - consumed_distance) amount units
+                double additional_distance = allowed_distance - consumed_distance;
+                double fraction_distance = additional_distance / this_distance;
+
+                GHPoint intermediate_2d = DistanceCalcEarth.DIST_EARTH.intermediatePoint(fraction_distance, prev_element.lat, prev_element.lon, element.lat, element.lon);
+
+                // Copy elevation to 3d point
+                GHPoint3D intermediate = new GHPoint3D(intermediate_2d.lat, intermediate_2d.lon, element.ele);
+                element = intermediate;
+                element.lat = intermediate.lat;
+                element.lon = intermediate.lon;
+                element.ele = intermediate.ele;
+                consumed_distance += additional_distance;
+            } else {
+                consumed_distance += this_distance;
+            }
+
         }
 
-        assert Math.abs(allowed_distance - consumed_distance) < 0.5 : String.valueOf(allowed_distance) + " " + String.valueOf(consumed_distance);
+        IsoLabel this_label = new IsoLabel(geom, label);
+
+        this.consumer.accept(this_label);
+
+        assert Math.abs(allowed_distance - consumed_distance) < 0.5 : allowed_distance + " " + consumed_distance;
     }
 
 

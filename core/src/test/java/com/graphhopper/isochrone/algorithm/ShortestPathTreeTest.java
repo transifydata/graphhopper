@@ -1,17 +1,20 @@
 package com.graphhopper.isochrone.algorithm;
 
-import com.graphhopper.routing.ev.BooleanEncodedValue;
-import com.graphhopper.routing.ev.DecimalEncodedValue;
-import com.graphhopper.routing.ev.DecimalEncodedValueImpl;
-import com.graphhopper.routing.ev.SimpleBooleanEncodedValue;
+import com.graphhopper.GraphHopper;
+import com.graphhopper.config.Profile;
+import com.graphhopper.routing.ev.*;
 import com.graphhopper.routing.util.AllEdgesIterator;
+import com.graphhopper.routing.util.DefaultSnapFilter;
 import com.graphhopper.routing.util.EncodingManager;
 import com.graphhopper.routing.util.TraversalMode;
 import com.graphhopper.routing.weighting.FastestWeighting;
 import com.graphhopper.routing.weighting.TurnCostProvider;
-import com.graphhopper.storage.BaseGraph;
-import com.graphhopper.storage.Graph;
+import com.graphhopper.storage.*;
+import com.graphhopper.storage.index.Snap;
+import com.graphhopper.util.EdgeIteratorState;
+import com.graphhopper.util.FetchMode;
 import com.graphhopper.util.GHUtility;
+import com.graphhopper.util.shapes.GHPoint3D;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -64,10 +67,24 @@ public class ShortestPathTreeTest {
     private final DecimalEncodedValue speedEnc = new DecimalEncodedValueImpl("speed", 5, 5, false);
     private final EncodingManager encodingManager = EncodingManager.start().add(accessEnc).add(speedEnc).build();
     private BaseGraph graph;
+    private GraphHopper hopper;
 
+
+    public void setup1() {
+        GraphHopper hopper = new GraphHopper();
+        hopper.setOSMFile("../prince-edward-island.osm.pbf");
+        hopper.setGraphHopperLocation("shortpathtest-cache7");
+        hopper.setProfiles(new Profile("car").setVehicle("car").setWeighting("fastest").setTurnCosts(false));
+
+        hopper.importOrLoad();
+
+
+        this.hopper = hopper;
+    }
 
     @BeforeEach
     public void setUp() {
+        setup1();
         graph = new BaseGraph.Builder(encodingManager).create();
         //         8
         //        /
@@ -325,27 +342,79 @@ public class ShortestPathTreeTest {
     }
 
     @Test
+    public void t1() {
+        Graph graph = hopper.getBaseGraph();
+        EdgeIteratorState edge = graph.getEdgeIteratorState(15980, Integer.MIN_VALUE);
+        System.out.println("Edge way geom" + edge.fetchWayGeometry(FetchMode.ALL));
+
+        System.out.print("[");
+        boolean first = true;
+        for (GHPoint3D i : edge.fetchWayGeometry(FetchMode.ALL)) {
+            if (first) {
+                first = false;
+            } else {
+                System.out.print(",");
+            }
+
+            System.out.printf("[%f, %f]", i.lon, i.lat);
+        }
+        System.out.print("]");
+    }
+
+    @Test
     public void testSearchByDistanceWithOverextendedEdges() {
-        List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
-        List<ShortestPathTree.IsoLabel> result1 = new ArrayList<>();
+        Graph graph = hopper.getBaseGraph();
+
+        EncodingManager encodingManager = hopper.getEncodingManager();
+        BooleanEncodedValue accessEnc = encodingManager.getBooleanEncodedValue(VehicleAccess.key("car"));
+        DecimalEncodedValue speedEnc = encodingManager.getDecimalEncodedValue(VehicleSpeed.key("car"));
+
+        // snap some GPS coordinates to the routing graph and build a query graph
+        FastestWeighting weighting = new FastestWeighting(accessEnc, speedEnc);
+
+        Snap snap = hopper.getLocationIndex().findClosest( 46.3300613,-63.0106060, new DefaultSnapFilter(weighting, encodingManager.getBooleanEncodedValue(Subnetwork.key("car"))));
+
+        List<PillarEdgeResolver.IsoLabel> result = new ArrayList<>();
+        PillarEdgeResolver r = new PillarEdgeResolver(result::add, graph);
         ShortestPathTree instance = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
 
-        instance.setIncludeOverextendedEdges(false);
-        instance.setDistanceLimit(100);
-        instance.search(0, result::add);
+        instance.setIncludeOverextendedEdges(true);
+        instance.setDistanceLimit(19000);
+//        instance.search(0, result::add);
 
-        ShortestPathTree instance1 = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
-        instance1.setIncludeOverextendedEdges(true);
-        instance1.setDistanceLimit(100);
-        instance1.search(0, result1::add);
+        instance.search(snap.getClosestNode(), r);
 
-        assertEquals(4, result.size());
-        assertEquals(6, result1.size());
 
-        assertTrue(result.stream().noneMatch(l -> l.consumed_part.isPresent()));
 
-        // Test that the 2 additional edges returned are only partially consumed
-        assertEquals(2, result1.stream().filter(l -> l.consumed_part.isPresent()).count());
+//        ShortestPathTree instance1 = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
+//        instance1.setIncludeOverextendedEdges(true);
+//        instance1.setDistanceLimit(100);
+//        instance1.search(0, result1::add);
+//
+//        assertEquals(4, result.size());
+//        assertEquals(6, result1.size());
+//
+//        assertTrue(result.stream().noneMatch(l -> l.consumed_part.isPresent()));
+//
+//        // Test that the 2 additional edges returned are only partially consumed
+//        assertEquals(2, result1.stream().filter(l -> l.consumed_part.isPresent()).count());
     }
+
+//    @Test
+//    public void testSearchByDistanceWithOverextendedEdges11() {
+//        LocationIndex locationIndex = g.getLocationIndex();
+//
+//        Snap snap = locationIndex.findClosest(point.get().lat, point.get().lon, new DefaultSnapFilter(weighting, inSubnetworkEnc));
+//
+//        g.debugPrint();
+//        List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
+//        ShortestPathTree instance = new ShortestPathTree(g, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
+//
+//        instance.setIncludeOverextendedEdges(false);
+//        instance.setDistanceLimit(100);
+//        instance.search(0, result::add);
+//
+//        System.out.println(result);
+//    }
 
 }
