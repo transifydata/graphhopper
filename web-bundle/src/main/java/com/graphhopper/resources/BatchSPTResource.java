@@ -56,7 +56,6 @@ public class BatchSPTResource {
     ) {
         StopWatch sw = new StopWatch().start();
 
-
         PMap hintsMap = new PMap();
         RouteResource.initHints(hintsMap, uriInfo.getQueryParameters());
         hintsMap.putObject(Parameters.CH.DISABLE, true);
@@ -97,19 +96,13 @@ public class BatchSPTResource {
                 throw new RuntimeException("distance_limit must not be null and be greater than 0");
             }
 
-
-            PillarEdgeResolver pillarEdgeResolver = new PillarEdgeResolver(l -> {
-                edges.add(l.pl);
-            }, graph);
+            PillarEdgeResolver pillarEdgeResolver = new PillarEdgeResolver(l -> edges.add(l.pl), graph);
             shortestPathTree.search(snap.getClosestNode(), pillarEdgeResolver);
         }
-
-
 
         Object response;
         if (calculateBufferDistance.isPresent()) {
             EdgeBuffering eb = new EdgeBuffering(edges);
-            // Give media type explicitly since we are annotating CSV and JSON, because error messages are JSON.
             response = eb.buildEdgeBufferGeoJSON(calculateBufferDistance.getAsDouble());
         } else {
             // Just return the edges

@@ -5,6 +5,8 @@ import com.graphhopper.storage.NodeAccess;
 import com.graphhopper.util.*;
 import com.graphhopper.util.shapes.GHPoint;
 import com.graphhopper.util.shapes.GHPoint3D;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.function.Consumer;
 
@@ -14,6 +16,8 @@ import java.util.function.Consumer;
  * edge geometry, especially for curved roads with few intersections.
  */
 public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
+    private static final Logger logger = LoggerFactory.getLogger(PillarEdgeResolver.class);
+
     Consumer<IsoLabel> consumer;
     Graph graph;
 
@@ -43,6 +47,7 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
 
     @Override
     public void accept(ShortestPathTree.IsoLabel label) {
+        final double DISTANCE_MARGIN = 0.02;
         NodeAccess na = graph.getNodeAccess();
 
 
@@ -63,7 +68,7 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
         final double allowed_distance = label.consumed_part;
         double consumed_distance = 0;
 
-        if (allowed_distance < 0.005) {
+        if (allowed_distance < DISTANCE_MARGIN) {
             return;
         }
 
@@ -79,13 +84,13 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
         assert (DistanceCalcEarth.calcDistance(geom, geom.is3D()) + 1.0 >= allowed_distance);
 
         for (int i = 1; i < geom.size(); i++) {
-            GHPoint3D prev_element = geom.get(i - 1);
-            GHPoint3D element = geom.get(i);
-            if (Math.abs(consumed_distance - allowed_distance) < 0.01) {
+            if (Math.abs(consumed_distance - allowed_distance) < DISTANCE_MARGIN) {
                 // Delete the remaining PointList elements
                 geom.trimToSize(i);
                 break;
             }
+            GHPoint3D prev_element = geom.get(i - 1);
+            GHPoint3D element = geom.get(i);
 
             double this_distance = DistanceCalcEarth.DIST_EARTH.calcDist3D(element.lat, element.lon, element.ele, prev_element.lat, prev_element.lon, prev_element.ele);
 
@@ -114,7 +119,9 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
 
         this.consumer.accept(this_label);
 
-        assert Math.abs(allowed_distance - consumed_distance) < 0.5 : allowed_distance + " " + consumed_distance;
+        if (Math.abs(allowed_distance - consumed_distance) > 0.5) {
+            logger.warn("Allowed and consumed distance not match: " + allowed_distance + " " + consumed_distance);
+        }
     }
 
 

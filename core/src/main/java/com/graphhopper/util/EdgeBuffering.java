@@ -20,6 +20,12 @@ import java.util.List;
 public class EdgeBuffering {
 
     private static final Logger logger = LoggerFactory.getLogger(EdgeBuffering.class);
+    private static final CRSFactory crsFactory = new CRSFactory();
+
+    private static final CoordinateReferenceSystem longLatCRS = crsFactory.createFromParameters("4326", "+proj=longlat +datum=WGS84 +no_defs");
+
+    private static final CoordinateReferenceSystem azimuthEquivalentNAD83CRS = crsFactory.createFromParameters("4269", "+proj=aeqd +datum=NAD83 +no_defs");
+
     public List<Geometry> edges;
 
     private static List<Geometry> buildGeometryFromLines(List<PointList> lines) {
@@ -56,8 +62,7 @@ public class EdgeBuffering {
     public Geometry buildEdgeBuffer(double distance) {
         // Builds an edge buffer of `distance` meters around the list of edges
         BufferParameters params = new BufferParameters();
-        params.setSimplifyFactor(0.2);
-        params.setQuadrantSegments(4);
+        params.setSimplifyFactor(0.02);
 
         List<Geometry> buffered_geoms = new ArrayList<>(this.edges.size());
         for (Geometry g : this.edges) {
@@ -78,7 +83,6 @@ public class EdgeBuffering {
     public static String toGeoJSON(Geometry g) {
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JtsModule());
-
         try {
             return objectMapper.writeValueAsString(g);
         } catch (JsonProcessingException exc) {
@@ -87,22 +91,17 @@ public class EdgeBuffering {
     }
 
     private static Coordinate transformLatLongToNAD83(Coordinate inputCoordinate, boolean inverse) {
-        CRSFactory crsFactory = new CRSFactory();
-        CoordinateReferenceSystem sourceCRS = crsFactory.createFromParameters("4326", "+proj=longlat +datum=WGS84 +no_defs");
-        CoordinateReferenceSystem targetCRS = crsFactory.createFromParameters("4269", "+proj=aeqd +datum=NAD83 +no_defs");
-
-
         double longitude = inputCoordinate.x;
         double latitude = inputCoordinate.y;
-
-        // Define the input and output coordinate reference systems (CRS)
 
         // Create the coordinate transformation
         CoordinateTransformFactory transformFactory = new CoordinateTransformFactory();
 
-        CoordinateTransform transform = transformFactory.createTransform(sourceCRS, targetCRS);
+        CoordinateTransform transform;
         if (inverse) {
-            transform = transformFactory.createTransform(targetCRS, sourceCRS);
+            transform = transformFactory.createTransform(azimuthEquivalentNAD83CRS, longLatCRS);
+        } else {
+            transform = transformFactory.createTransform(longLatCRS, azimuthEquivalentNAD83CRS);
         }
 
         // Perform the coordinate transformation
