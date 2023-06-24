@@ -74,9 +74,10 @@ public class BatchSPTResource {
         Weighting weighting = graphHopper.createWeighting(profile, hintsMap);
         BooleanEncodedValue inSubnetworkEnc = graphHopper.getEncodingManager().getBooleanEncodedValue(Subnetwork.key(profileName));
 
-        List<PointList> edges = new ArrayList<>(request.points.size());
+        List<List<PointList>> edges = new ArrayList<>(request.points.size());
 
         for (GHPoint point : request.points) {
+            ArrayList<PointList> curList = new ArrayList<>();
             double lat = point.lat;
             double lon = point.lon;
             Snap snap = locationIndex.findClosest(lat, lon, new DefaultSnapFilter(weighting, inSubnetworkEnc));
@@ -96,8 +97,10 @@ public class BatchSPTResource {
                 throw new RuntimeException("distance_limit must not be null and be greater than 0");
             }
 
-            PillarEdgeResolver pillarEdgeResolver = new PillarEdgeResolver(l -> edges.add(l.pl), graph);
+            PillarEdgeResolver pillarEdgeResolver = new PillarEdgeResolver(l -> curList.add(l.pl), graph);
             shortestPathTree.search(snap.getClosestNode(), pillarEdgeResolver);
+
+            edges.add(curList);
         }
 
         Object response;
@@ -110,12 +113,14 @@ public class BatchSPTResource {
             // Build an array with these columns for each IsoLabel
             List<double[]> rows = new ArrayList<>();
 
-            for (PointList pointList : edges) {
-                GHPoint prev_point = null;
-                for (GHPoint point : pointList) {
-                    if (prev_point != null)
-                        rows.add(new double[]{prev_point.lat, prev_point.lon, point.lat, point.lon});
-                    prev_point = point;
+            for (List<PointList> pointLists : edges) {
+                for (PointList pointList : pointLists) {
+                    GHPoint prev_point = null;
+                    for (GHPoint point : pointList) {
+                        if (prev_point != null)
+                            rows.add(new double[]{prev_point.lat, prev_point.lon, point.lat, point.lon});
+                        prev_point = point;
+                    }
                 }
             }
 
