@@ -99,9 +99,9 @@ public class EdgeBuffering {
 
 
         List<Geometry> buffered_geoms = new ArrayList<>(this.edges.size());
-        int numPoints = 0;
-        final int WINDOW_SIZE = 30;
-        ExecutorService executor = Executors.newWorkStealingPool(9);
+        final int WINDOW_SIZE = 20;
+        logger.info("Using window size of " + WINDOW_SIZE);
+        ExecutorService executor = Executors.newWorkStealingPool();
 
         List<Future<Geometry>> futures = new ArrayList<>();
         StopWatch sw = new StopWatch().start();
@@ -112,7 +112,7 @@ public class EdgeBuffering {
 
                 Geometry buffered = BufferOp.bufferOp(g, distance, params);
 
-                return DouglasPeuckerSimplifier.simplify(buffered, 20);
+                return DouglasPeuckerSimplifier.simplify(buffered, 8);
             });
             futures.add(fut);
         }
@@ -126,8 +126,7 @@ public class EdgeBuffering {
                 throw new RuntimeException(e);
             }
         }
-        // 4 + 10 seconds
-        logger.info("Buffered " + this.edges.size() + " edges into " + buffered_geoms.size() + " buffers with " + numPoints + " points. Took " + sw.stop().getSeconds() + " seconds.");
+        logger.info("Buffered " + this.edges.size() + " edges into " + buffered_geoms.size() + " buffers. Took " + sw.stop().getSeconds() + " seconds.");
 
         sw = new StopWatch().start();
 
