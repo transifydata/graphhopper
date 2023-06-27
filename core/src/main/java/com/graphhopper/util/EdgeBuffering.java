@@ -4,6 +4,7 @@ import com.bedatadriven.jackson.datatype.jts.JtsModule;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.jetbrains.annotations.Nullable;
 import org.locationtech.jts.geom.*;
 import org.locationtech.jts.geom.impl.CoordinateArraySequence;
 import org.locationtech.jts.geom.impl.PackedCoordinateSequenceFactory;
@@ -81,7 +82,7 @@ public class EdgeBuffering {
         return toGeoJSON(buffered);
     }
 
-    public Geometry unionGeos(List<? extends Geometry> geos) {
+    public @Nullable Geometry unionGeos(List<? extends Geometry> geos) {
         UnaryUnionOp unionOp = new UnaryUnionOp(geos);
         return unionOp.union();
     }
@@ -126,13 +127,19 @@ public class EdgeBuffering {
 
         Geometry unioned = unionGeos(buffered_geoms);
 
-        logger.info("Unioned " + buffered_geoms.size() + " buffers into " + unioned.getNumGeometries() + " geometries. Took " + sw.stop().getSeconds() + " seconds.");
+        if (unioned == null) {
+            // Null occurs when there are no geometries to union
+            throw new RuntimeException("Failed to union geometries -- no geometries to union");
+        } else {
+            logger.info("Unioned " + buffered_geoms.size() + " buffers into " + unioned.getNumGeometries() + " geometries. Took " + sw.stop().getSeconds() + " seconds.");
+        }
 
         for (Coordinate c : unioned.getCoordinates()) {
             Coordinate transformed = transformLatLongToNAD83(c, true);
             c.x = transformed.x;
             c.y = transformed.y;
         }
+
         return unioned;
     };
 
