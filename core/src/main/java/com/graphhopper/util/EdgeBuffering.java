@@ -35,7 +35,7 @@ public class EdgeBuffering {
 
     public List<LineString> edges;
 
-    private static List<LineString> buildGeometryFromLines(List<List<PointList>> lines) {
+    public static List<LineString> buildGeometryFromLines(List<List<PointList>> lines, boolean convertCoords) {
         GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326, new PackedCoordinateSequenceFactory());
 
         List<LineString> geoms = new ArrayList<>();
@@ -46,8 +46,12 @@ public class EdgeBuffering {
                 Coordinate[] coordinates = new Coordinate[line.size()];
                 for (int i = 0; i < line.size(); i += 1) {
                     Coordinate latLng = new Coordinate(line.getLon(i), line.getLat(i));
-                    Coordinate nad83Projected = transformLatLongToNAD83(latLng, false);
-                    coordinates[i] = nad83Projected;
+
+                    if (convertCoords) {
+                        coordinates[i] = transformLatLongToNAD83(latLng, false);
+                    } else {
+                        coordinates[i] = latLng;
+                    }
                 }
                 LineString ls = new LineString(new CoordinateArraySequence(coordinates), geometryFactory);
 
@@ -68,7 +72,7 @@ public class EdgeBuffering {
     public EdgeBuffering(List<List<PointList>> edges) {
         logger.info("Buffering edges: " + edges.size());
 
-        this.edges = buildGeometryFromLines(edges);
+        this.edges = buildGeometryFromLines(edges, true);
     }
 
 
@@ -86,16 +90,6 @@ public class EdgeBuffering {
         BufferParameters params = new BufferParameters();
         params.setSimplifyFactor(0.1);
         params.setQuadrantSegments(4);
-
-//        MultiLineString x = new MultiLineString(this.edges.toArray(new LineString[0]), new GeometryFactory());
-//
-//        for (Coordinate c : x.getCoordinates()) {
-//            Coordinate transformed = transformLatLongToNAD83(c, true);
-//            c.x = transformed.x;
-//            c.y = transformed.y;
-//        }
-//
-//        String gj = toGeoJSON(x);
 
 
         List<Geometry> buffered_geoms = new ArrayList<>(this.edges.size());

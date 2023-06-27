@@ -16,6 +16,10 @@ import com.graphhopper.storage.index.LocationIndex;
 import com.graphhopper.storage.index.Snap;
 import com.graphhopper.util.*;
 import com.graphhopper.util.shapes.GHPoint;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.MultiLineString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -76,7 +80,8 @@ public class BatchSPTResource {
 
         List<List<PointList>> edges = new ArrayList<>(request.points.size());
 
-        for (GHPoint point : request.points) {
+        for (SPTPoint point_struct : request.points) {
+            GHPoint point = point_struct.point;
             ArrayList<PointList> curList = new ArrayList<>();
             double lat = point.lat;
             double lon = point.lon;
@@ -91,7 +96,9 @@ public class BatchSPTResource {
             ShortestPathTree shortestPathTree = new ShortestPathTree(queryGraph, queryGraph.wrapWeighting(weighting), reverseFlow, traversalMode);
             shortestPathTree.setIncludeOverextendedEdges(includeOverextended);
 
-            if (distanceInMeter.orElseThrow(() -> new IllegalArgumentException("query param distance_limit is not a number.")) > 0) {
+            if (point_struct.distance_limit > 0) {
+                shortestPathTree.setDistanceLimit(point_struct.distance_limit);
+            } else if (distanceInMeter.orElseThrow(() -> new IllegalArgumentException("query param distance_limit is not a number.")) > 0) {
                 shortestPathTree.setDistanceLimit(distanceInMeter.getAsLong());
             } else {
                 throw new RuntimeException("distance_limit must not be null and be greater than 0");
@@ -108,24 +115,9 @@ public class BatchSPTResource {
             EdgeBuffering eb = new EdgeBuffering(edges);
             response = eb.buildEdgeBufferGeoJSON(calculateBufferDistance.getAsDouble());
         } else {
-            // Just return the edges
-            // Columns we want are: prev_latitude, prev_longitude, latitude, longitude
-            // Build an array with these columns for each IsoLabel
-            List<double[]> rows = new ArrayList<>();
-
-            for (List<PointList> pointLists : edges) {
-                for (PointList pointList : pointLists) {
-                    GHPoint prev_point = null;
-                    for (GHPoint point : pointList) {
-                        if (prev_point != null)
-                            rows.add(new double[]{prev_point.lat, prev_point.lon, point.lat, point.lon});
-                        prev_point = point;
-                    }
-                }
-            }
-
-            // Return rows as JSON
-            response = rows;
+            List<LineString> ls = EdgeBuffering.buildGeometryFromLines(edges, false);
+            Geometry geo = new MultiLineString(ls.toArray(new LineString[0]), new GeometryFactory());
+            response = EdgeBuffering.toGeoJSON(geo);
         }
 
         logger.info("took: " + sw.stop().getSeconds());
