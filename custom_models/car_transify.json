@@ -1,9 +1,10 @@
 // GraphHopper's bundled car.json with our distance_influence (was 70 in the pre-GH11 config,
 // where it lived inline in the profile; profiles cannot combine custom_model_files with an
-// inline custom_model, so it lives here instead).
+// inline custom_model, so it lives here instead) and with ferries excluded.
 {
   "distance_influence": 70,
   "priority": [
+    { "if": "road_environment == FERRY", "multiply_by": "0" },
     { "if": "!car_access", "multiply_by": "0" }
   ],
   "speed": [

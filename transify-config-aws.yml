@@ -1,11 +1,10 @@
 graphhopper:
-  # Full extract - ferries are no longer stripped from the PBF; the walk profile
-  # excludes them via custom_models/walk_no_ferry.json instead.
+  # Full extract - ferries are no longer stripped from the PBF; instead walk, car and
+  # transit_car exclude them in their custom models (bike keeps ferry connections).
   datareader.file: "../north-america-latest.osm.pbf"
   graph.location: graph-cache-north-america
 
   # GH 9+ profiles: no 'vehicle'/'weighting' keys; each profile IS its custom model.
-  # Encoded values referenced by the custom models are added to the graph automatically.
   profiles:
     - name: car
       # motorcar/motor_vehicle turn restrictions from OSM apply to this profile
