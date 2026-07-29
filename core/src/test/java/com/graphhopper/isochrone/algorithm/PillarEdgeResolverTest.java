@@ -134,14 +134,9 @@ public class PillarEdgeResolverTest {
         assertEquals(na.getLon(1), crossing.pl.getLon(0), 1.e-4);
         assertTrue(crossing.pl.size() < 4, "trimmed geometry should have dropped points, got " + crossing.pl);
 
+        // the polyline is cut exactly at the consumed distance via the interpolated point
         double trimmedLength = DistanceCalcEarth.calcDistance(crossing.pl, true);
-        assertTrue(trimmedLength < dist12 - 0.5,
-                "trimmed length " + trimmedLength + " should be well below the full edge " + dist12);
-        // the trim happens at segment granularity (see PillarEdgeResolver), so allow one
-        // segment of slack around the exact consumed distance
-        double maxSegment = dist12; // upper bound on any single segment
-        assertTrue(trimmedLength <= allowed12 + maxSegment,
-                "trimmed length " + trimmedLength + " far beyond allowed " + allowed12);
+        assertEquals(allowed12, trimmedLength, 0.5);
     }
 
     @Test

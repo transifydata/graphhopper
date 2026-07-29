@@ -102,12 +102,10 @@ public class PillarEdgeResolver implements Consumer<ShortestPathTree.IsoLabel> {
 
                 GHPoint intermediate_2d = DistanceCalcEarth.DIST_EARTH.intermediatePoint(fraction_distance, prev_element.lat, prev_element.lon, element.lat, element.lon);
 
-                // Copy elevation to 3d point
-                GHPoint3D intermediate = new GHPoint3D(intermediate_2d.lat, intermediate_2d.lon, element.ele);
-                element = intermediate;
-                element.lat = intermediate.lat;
-                element.lon = intermediate.lon;
-                element.ele = intermediate.ele;
+                // replace the segment end with the cut point so the trimmed polyline ends
+                // exactly at the consumed distance (geom.get returns a copy, so the point
+                // must be written back into the PointList)
+                geom.set(i, intermediate_2d.lat, intermediate_2d.lon, element.ele);
                 consumed_distance += additional_distance;
             } else {
                 consumed_distance += this_distance;
