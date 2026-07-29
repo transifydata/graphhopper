@@ -19,22 +19,22 @@
 package com.graphhopper.routing;
 
 import com.graphhopper.config.Profile;
-import com.graphhopper.routing.ev.*;
+import com.graphhopper.routing.ev.BooleanEncodedValue;
+import com.graphhopper.routing.ev.TurnRestriction;
 import com.graphhopper.routing.util.EncodingManager;
-import com.graphhopper.routing.util.VehicleEncodedValues;
-import com.graphhopper.routing.weighting.*;
-import com.graphhopper.routing.weighting.custom.CustomModelParser;
-import com.graphhopper.routing.weighting.custom.CustomProfile;
+import com.graphhopper.routing.weighting.DefaultTurnCostProvider;
+import com.graphhopper.routing.weighting.TurnCostProvider;
+import com.graphhopper.routing.weighting.Weighting;
 import com.graphhopper.routing.weighting.custom.CustomWeighting;
+import com.graphhopper.routing.weighting.custom.CustomWeighting2;
 import com.graphhopper.storage.BaseGraph;
 import com.graphhopper.util.CustomModel;
 import com.graphhopper.util.PMap;
 import com.graphhopper.util.Parameters;
+import com.graphhopper.util.TurnCostsConfig;
 
-import static com.graphhopper.routing.weighting.FastestWeighting.DESTINATION_FACTOR;
-import static com.graphhopper.routing.weighting.FastestWeighting.PRIVATE_FACTOR;
 import static com.graphhopper.routing.weighting.TurnCostProvider.NO_TURN_COST_PROVIDER;
-import static com.graphhopper.routing.weighting.Weighting.INFINITE_U_TURN_COSTS;
+import static com.graphhopper.routing.weighting.custom.CustomModelParser.createWeightingParameters;
 import static com.graphhopper.util.Helper.toLowerCase;
 
 public class DefaultWeightingFactory implements WeightingFactory {
@@ -56,70 +56,57 @@ public class DefaultWeightingFactory implements WeightingFactory {
         hints.putAll(profile.getHints());
         hints.putAll(requestHints);
 
-        final String vehicle = profile.getVehicle();
-        if (isOutdoorVehicle(vehicle)) {
-            hints.putObject(PRIVATE_FACTOR, hints.getDouble(PRIVATE_FACTOR, 1.2));
-        } else {
-            hints.putObject(DESTINATION_FACTOR, hints.getDouble(DESTINATION_FACTOR, 10));
-            hints.putObject(PRIVATE_FACTOR, hints.getDouble(PRIVATE_FACTOR, 10));
-        }
-        TurnCostProvider turnCostProvider;
-        if (profile.isTurnCosts() && !disableTurnCosts) {
-            DecimalEncodedValue turnCostEnc = encodingManager.getDecimalEncodedValue(TurnCost.key(vehicle));
-            if (turnCostEnc == null)
-                throw new IllegalArgumentException("Vehicle " + vehicle + " does not support turn costs");
-            int uTurnCosts = hints.getInt(Parameters.Routing.U_TURN_COSTS, INFINITE_U_TURN_COSTS);
-            turnCostProvider = new DefaultTurnCostProvider(turnCostEnc, graph.getTurnCostStorage(), uTurnCosts);
-        } else {
-            turnCostProvider = NO_TURN_COST_PROVIDER;
-        }
-
         String weightingStr = toLowerCase(profile.getWeighting());
         if (weightingStr.isEmpty())
             throw new IllegalArgumentException("You have to specify a weighting");
 
         Weighting weighting = null;
-        BooleanEncodedValue accessEnc = encodingManager.getBooleanEncodedValue(VehicleAccess.key(vehicle));
-        DecimalEncodedValue speedEnc = encodingManager.getDecimalEncodedValue(VehicleSpeed.key(vehicle));
-        DecimalEncodedValue priorityEnc = encodingManager.hasEncodedValue(VehiclePriority.key(vehicle))
-                ? encodingManager.getDecimalEncodedValue(VehiclePriority.key(vehicle))
-                : null;
         if (CustomWeighting.NAME.equalsIgnoreCase(weightingStr)) {
-            if (!(profile instanceof CustomProfile))
-                throw new IllegalArgumentException("custom weighting requires a CustomProfile but was profile=" + profile.getName());
-            CustomModel queryCustomModel = requestHints.getObject(CustomModel.KEY, null);
-            CustomProfile customProfile = (CustomProfile) profile;
+            final CustomModel queryCustomModel = requestHints.getObject(CustomModel.KEY, null);
+            if (profile.getTurnCostsConfig() != null && !profile.getTurnCostsConfig().isAllowTurnPenaltyInRequest() && queryCustomModel != null && !queryCustomModel.getTurnPenalty().isEmpty())
+                throw new IllegalArgumentException("The turn_penalty feature is not supported per request for " + profile.getName() + ". Set 'allow_turn_penalty_in_request' to true in the 'turn_costs' option in the config.yml.");
 
-            queryCustomModel = CustomModel.merge(customProfile.getCustomModel(), queryCustomModel);
-            weighting = CustomModelParser.createWeighting(accessEnc, speedEnc,
-                    priorityEnc, encodingManager, turnCostProvider, queryCustomModel);
+            final CustomModel mergedCustomModel = CustomModel.merge(profile.getCustomModel(), queryCustomModel);
+            if (requestHints.has(Parameters.Routing.HEADING_PENALTY))
+                mergedCustomModel.setHeadingPenalty(requestHints.getDouble(Parameters.Routing.HEADING_PENALTY, Parameters.Routing.DEFAULT_HEADING_PENALTY));
+
+            CustomWeighting.Parameters parameters = createWeightingParameters(mergedCustomModel, encodingManager);
+            final TurnCostProvider turnCostProvider;
+            if (profile.hasTurnCosts() && !disableTurnCosts) {
+                BooleanEncodedValue turnRestrictionEnc = encodingManager.getTurnBooleanEncodedValue(TurnRestriction.key(profile.getName()));
+                if (turnRestrictionEnc == null)
+                    throw new IllegalArgumentException("Cannot find turn restriction encoded value for " + profile.getName());
+                int uTurnCosts = hints.getInt(Parameters.Routing.U_TURN_COSTS, profile.getTurnCostsConfig().getUTurnCosts());
+                TurnCostsConfig tcConfig = new TurnCostsConfig(profile.getTurnCostsConfig()).setUTurnCosts(uTurnCosts);
+                turnCostProvider = new DefaultTurnCostProvider(turnRestrictionEnc, graph, tcConfig, parameters.getTurnPenaltyMapping());
+            } else {
+                if (!mergedCustomModel.getTurnPenalty().isEmpty())
+                    throw new IllegalArgumentException("The turn_penalty feature is not supported for " + profile.getName() + ". You have to enable this in 'turn_costs' in config.yml.");
+                turnCostProvider = NO_TURN_COST_PROVIDER;
+            }
+
+            if (hints.has("cm_version")) {
+                if (!hints.getString("cm_version", "").equals("2"))
+                    throw new IllegalArgumentException("cm_version: \"2\" is required");
+                weighting = new CustomWeighting2(turnCostProvider, parameters);
+            } else {
+                weighting = new CustomWeighting(turnCostProvider, parameters);
+            }
+
         } else if ("shortest".equalsIgnoreCase(weightingStr)) {
-            weighting = new ShortestWeighting(accessEnc, speedEnc, turnCostProvider);
+            throw new IllegalArgumentException("Instead of weighting=shortest use weighting=custom with a high distance_influence");
         } else if ("fastest".equalsIgnoreCase(weightingStr)) {
-            if (!encodingManager.hasEncodedValue(RoadAccess.KEY))
-                throw new IllegalArgumentException("The fastest weighting requires road_access");
-            EnumEncodedValue<RoadAccess> roadAccessEnc = encodingManager.getEnumEncodedValue(RoadAccess.KEY, RoadAccess.class);
-            if (priorityEnc != null)
-                weighting = new PriorityWeighting(accessEnc, speedEnc, priorityEnc, roadAccessEnc, hints, turnCostProvider);
-            else
-                weighting = new FastestWeighting(accessEnc, speedEnc, roadAccessEnc, hints, turnCostProvider);
+            throw new IllegalArgumentException("Instead of weighting=fastest use weighting=custom with a custom model that avoids road_access == DESTINATION");
         } else if ("curvature".equalsIgnoreCase(weightingStr)) {
             throw new IllegalArgumentException("The curvature weighting is no longer supported since 7.0. Use a custom " +
                     "model with the EncodedValue 'curvature' instead");
         } else if ("short_fastest".equalsIgnoreCase(weightingStr)) {
-            if (!encodingManager.hasEncodedValue(RoadAccess.KEY))
-                throw new IllegalArgumentException("The short_fastest weighting requires road_access");
-            EnumEncodedValue<RoadAccess> roadAccessEnc = encodingManager.getEnumEncodedValue(RoadAccess.KEY, RoadAccess.class);
-            weighting = new ShortFastestWeighting(accessEnc, speedEnc, roadAccessEnc, hints, turnCostProvider);
+            throw new IllegalArgumentException("Instead of weighting=short_fastest use weighting=custom with a distance_influence");
         }
 
         if (weighting == null)
             throw new IllegalArgumentException("Weighting '" + weightingStr + "' not supported");
 
         return weighting;
-    }
-
-    public boolean isOutdoorVehicle(String name) {
-        return VehicleEncodedValues.OUTDOOR_VEHICLES.contains(name);
     }
 }

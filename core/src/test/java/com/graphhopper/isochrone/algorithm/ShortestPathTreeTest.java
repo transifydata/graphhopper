@@ -1,20 +1,23 @@
 package com.graphhopper.isochrone.algorithm;
 
-import com.graphhopper.GraphHopper;
-import com.graphhopper.config.Profile;
-import com.graphhopper.routing.ev.*;
+import com.graphhopper.json.Statement;
+import com.graphhopper.routing.ev.BooleanEncodedValue;
+import com.graphhopper.routing.ev.DecimalEncodedValue;
+import com.graphhopper.routing.ev.DecimalEncodedValueImpl;
+import com.graphhopper.routing.ev.SimpleBooleanEncodedValue;
 import com.graphhopper.routing.util.AllEdgesIterator;
-import com.graphhopper.routing.util.DefaultSnapFilter;
 import com.graphhopper.routing.util.EncodingManager;
 import com.graphhopper.routing.util.TraversalMode;
-import com.graphhopper.routing.weighting.FastestWeighting;
 import com.graphhopper.routing.weighting.TurnCostProvider;
-import com.graphhopper.storage.*;
-import com.graphhopper.storage.index.Snap;
+import com.graphhopper.routing.weighting.Weighting;
+import com.graphhopper.routing.weighting.custom.CustomModelParser;
+import com.graphhopper.routing.weighting.custom.CustomWeighting;
+import com.graphhopper.storage.BaseGraph;
+import com.graphhopper.storage.Graph;
+import com.graphhopper.util.CustomModel;
+import com.graphhopper.util.EdgeIterator;
 import com.graphhopper.util.EdgeIteratorState;
-import com.graphhopper.util.FetchMode;
 import com.graphhopper.util.GHUtility;
-import com.graphhopper.util.shapes.GHPoint3D;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +26,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
+import static com.graphhopper.json.Statement.If;
+import static com.graphhopper.json.Statement.Op.MULTIPLY;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -65,26 +70,27 @@ public class ShortestPathTreeTest {
 
     private final BooleanEncodedValue accessEnc = new SimpleBooleanEncodedValue("access", true);
     private final DecimalEncodedValue speedEnc = new DecimalEncodedValueImpl("speed", 5, 5, false);
-    private final EncodingManager encodingManager = EncodingManager.start().add(accessEnc).add(speedEnc).build();
+    private final BooleanEncodedValue ferryEnc = new SimpleBooleanEncodedValue("ferry", false);
+    private final EncodingManager encodingManager = EncodingManager.start().add(accessEnc).add(speedEnc).add(ferryEnc).build();
     private BaseGraph graph;
-    private GraphHopper hopper;
 
+    private Weighting createWeighting() {
+        return createWeighting(TurnCostProvider.NO_TURN_COST_PROVIDER);
+    }
 
-    public void setup1() {
-        GraphHopper hopper = new GraphHopper();
-        hopper.setOSMFile("../prince-edward-island.osm.pbf");
-        hopper.setGraphHopperLocation("shortpathtest-cache7");
-        hopper.setProfiles(new Profile("car").setVehicle("car").setWeighting("fastest").setTurnCosts(false));
+    private Weighting createWeighting(TurnCostProvider turnCostProvider) {
+        return CustomModelParser.createWeighting(encodingManager, turnCostProvider, createBaseCustomModel());
+    }
 
-        hopper.importOrLoad();
-
-
-        this.hopper = hopper;
+    private CustomModel createBaseCustomModel() {
+        CustomModel customModel = new CustomModel();
+        customModel.addToPriority(If("!" + accessEnc.getName(), Statement.Op.MULTIPLY, "0"));
+        customModel.addToSpeed(If("true", Statement.Op.LIMIT, speedEnc.getName()));
+        return customModel;
     }
 
     @BeforeEach
     public void setUp() {
-        setup1();
         graph = new BaseGraph.Builder(encodingManager).create();
         //         8
         //        /
@@ -136,7 +142,7 @@ public class ShortestPathTreeTest {
     @Test
     public void testSPTAndIsochrone25Seconds() {
         List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
-        ShortestPathTree instance = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
+        ShortestPathTree instance = new ShortestPathTree(graph, createWeighting(), false, TraversalMode.NODE_BASED);
         instance.setTimeLimit(25_000);
         instance.search(0, result::add);
         assertEquals(3, result.size());
@@ -152,7 +158,7 @@ public class ShortestPathTreeTest {
     @Test
     public void testSPT26Seconds() {
         List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
-        ShortestPathTree instance = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
+        ShortestPathTree instance = new ShortestPathTree(graph, createWeighting(), false, TraversalMode.NODE_BASED);
         instance.setTimeLimit(26_000);
         instance.search(0, result::add);
         assertEquals(4, result.size());
@@ -167,7 +173,7 @@ public class ShortestPathTreeTest {
     @Test
     public void testNoTimeLimit() {
         List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
-        ShortestPathTree instance = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
+        ShortestPathTree instance = new ShortestPathTree(graph, createWeighting(), false, TraversalMode.NODE_BASED);
         instance.setTimeLimit(Double.MAX_VALUE);
         instance.search(0, result::add);
         assertEquals(9, result.size());
@@ -185,9 +191,36 @@ public class ShortestPathTreeTest {
     }
 
     @Test
+    public void testFerry() {
+        AllEdgesIterator allEdges = graph.getAllEdges();
+        while (allEdges.next()) {
+            allEdges.set(ferryEnc, false);
+        }
+        EdgeIteratorState edge = findEdge(6, 7);
+        edge.set(ferryEnc, true);
+
+        List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
+        CustomModel customModel = createBaseCustomModel();
+        customModel.addToPriority(If("ferry", MULTIPLY, "0.005"));
+        CustomWeighting weighting = CustomModelParser.createWeighting(encodingManager, TurnCostProvider.NO_TURN_COST_PROVIDER, customModel);
+        ShortestPathTree instance = new ShortestPathTree(graph, weighting, false, TraversalMode.NODE_BASED);
+        instance.setTimeLimit(30_000);
+        instance.search(0, result::add);
+        assertEquals(4, result.size());
+        assertAll(
+                () -> assertEquals(0, result.get(0).time), () -> assertEquals(0, result.get(0).node),
+                () -> assertEquals(9000, result.get(1).time), () -> assertEquals(4, result.get(1).node),
+                () -> assertEquals(18000, result.get(2).time), () -> assertEquals(6, result.get(2).node),
+                () -> assertEquals(25200, result.get(3).time), () -> assertEquals(1, result.get(3).node)
+        );
+        assertEquals(7, instance.getVisitedNodes(), "If this increases, make sure we are not traversing entire graph irl");
+    }
+
+
+    @Test
     public void testEdgeBasedWithFreeUTurns() {
         List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
-        ShortestPathTree instance = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.EDGE_BASED);
+        ShortestPathTree instance = new ShortestPathTree(graph, createWeighting(), false, TraversalMode.EDGE_BASED);
         instance.setTimeLimit(Double.MAX_VALUE);
         instance.search(0, result::add);
         // The origin, and every end of every directed edge, are traversed.
@@ -219,7 +252,7 @@ public class ShortestPathTreeTest {
 
     @Test
     public void testEdgeBasedWithForbiddenUTurns() {
-        FastestWeighting fastestWeighting = new FastestWeighting(accessEnc, speedEnc, FORBIDDEN_UTURNS);
+        Weighting fastestWeighting = createWeighting(FORBIDDEN_UTURNS);
         List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
         ShortestPathTree instance = new ShortestPathTree(graph, fastestWeighting, false, TraversalMode.EDGE_BASED);
         instance.setTimeLimit(Double.MAX_VALUE);
@@ -253,7 +286,7 @@ public class ShortestPathTreeTest {
     @Test
     public void testEdgeBasedWithFinitePositiveUTurnCost() {
         TimeBasedUTurnCost turnCost = new TimeBasedUTurnCost(80000);
-        FastestWeighting fastestWeighting = new FastestWeighting(accessEnc, speedEnc, turnCost);
+        Weighting fastestWeighting = createWeighting(turnCost);
         List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
         ShortestPathTree instance = new ShortestPathTree(graph, fastestWeighting, false, TraversalMode.EDGE_BASED);
         instance.setTimeLimit(Double.MAX_VALUE);
@@ -288,9 +321,8 @@ public class ShortestPathTreeTest {
     @Test
     public void testEdgeBasedWithSmallerUTurnCost() {
         TimeBasedUTurnCost turnCost = new TimeBasedUTurnCost(20000);
-        FastestWeighting fastestWeighting = new FastestWeighting(accessEnc, speedEnc, turnCost);
         List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
-        ShortestPathTree instance = new ShortestPathTree(graph, fastestWeighting, false, TraversalMode.EDGE_BASED);
+        ShortestPathTree instance = new ShortestPathTree(graph, createWeighting(turnCost), false, TraversalMode.EDGE_BASED);
         instance.setTimeLimit(Double.MAX_VALUE);
         instance.search(0, result::add);
         // Something in between
@@ -323,7 +355,7 @@ public class ShortestPathTreeTest {
     @Test
     public void testSearchByDistance() {
         List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
-        ShortestPathTree instance = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
+        ShortestPathTree instance = new ShortestPathTree(graph, createWeighting(), false, TraversalMode.NODE_BASED);
         instance.setDistanceLimit(110.0);
         instance.search(5, result::add);
         assertEquals(6, result.size());
@@ -341,80 +373,14 @@ public class ShortestPathTreeTest {
         );
     }
 
-    @Test
-    public void t1() {
-        Graph graph = hopper.getBaseGraph();
-        EdgeIteratorState edge = graph.getEdgeIteratorState(15980, Integer.MIN_VALUE);
-        System.out.println("Edge way geom" + edge.fetchWayGeometry(FetchMode.ALL));
-
-        System.out.print("[");
-        boolean first = true;
-        for (GHPoint3D i : edge.fetchWayGeometry(FetchMode.ALL)) {
-            if (first) {
-                first = false;
-            } else {
-                System.out.print(",");
+    EdgeIteratorState findEdge(int a, int b) {
+        EdgeIterator edgeIterator = graph.createEdgeExplorer().setBaseNode(a);
+        while (edgeIterator.next()) {
+            if (edgeIterator.getAdjNode() == b) {
+                return edgeIterator;
             }
-
-            System.out.printf("[%f, %f]", i.lon, i.lat);
         }
-        System.out.print("]");
+        throw new RuntimeException("nope");
     }
-
-    @Test
-    public void testSearchByDistanceWithOverextendedEdges() {
-        Graph graph = hopper.getBaseGraph();
-
-        EncodingManager encodingManager = hopper.getEncodingManager();
-        BooleanEncodedValue accessEnc = encodingManager.getBooleanEncodedValue(VehicleAccess.key("car"));
-        DecimalEncodedValue speedEnc = encodingManager.getDecimalEncodedValue(VehicleSpeed.key("car"));
-
-        // snap some GPS coordinates to the routing graph and build a query graph
-        FastestWeighting weighting = new FastestWeighting(accessEnc, speedEnc);
-
-        Snap snap = hopper.getLocationIndex().findClosest( 46.3300613,-63.0106060, new DefaultSnapFilter(weighting, encodingManager.getBooleanEncodedValue(Subnetwork.key("car"))));
-
-        List<PillarEdgeResolver.IsoLabel> result = new ArrayList<>();
-        PillarEdgeResolver r = new PillarEdgeResolver(result::add, graph);
-        ShortestPathTree instance = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
-
-        instance.setIncludeOverextendedEdges(true);
-        instance.setDistanceLimit(19000);
-//        instance.search(0, result::add);
-
-        instance.search(snap.getClosestNode(), r);
-
-
-
-//        ShortestPathTree instance1 = new ShortestPathTree(graph, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
-//        instance1.setIncludeOverextendedEdges(true);
-//        instance1.setDistanceLimit(100);
-//        instance1.search(0, result1::add);
-//
-//        assertEquals(4, result.size());
-//        assertEquals(6, result1.size());
-//
-//        assertTrue(result.stream().noneMatch(l -> l.consumed_part.isPresent()));
-//
-//        // Test that the 2 additional edges returned are only partially consumed
-//        assertEquals(2, result1.stream().filter(l -> l.consumed_part.isPresent()).count());
-    }
-
-//    @Test
-//    public void testSearchByDistanceWithOverextendedEdges11() {
-//        LocationIndex locationIndex = g.getLocationIndex();
-//
-//        Snap snap = locationIndex.findClosest(point.get().lat, point.get().lon, new DefaultSnapFilter(weighting, inSubnetworkEnc));
-//
-//        g.debugPrint();
-//        List<ShortestPathTree.IsoLabel> result = new ArrayList<>();
-//        ShortestPathTree instance = new ShortestPathTree(g, new FastestWeighting(accessEnc, speedEnc), false, TraversalMode.NODE_BASED);
-//
-//        instance.setIncludeOverextendedEdges(false);
-//        instance.setDistanceLimit(100);
-//        instance.search(0, result::add);
-//
-//        System.out.println(result);
-//    }
 
 }

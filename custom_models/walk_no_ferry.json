@@ -1,0 +1,8 @@
+// Layered on top of foot.json to exclude ferries from walking directions.
+// This replaces the old approach of stripping ferry routes out of the OSM extract,
+// so other profiles (car, transit_car, bike) keep their ferry connections.
+{
+  "priority": [
+    { "if": "road_environment == FERRY", "multiply_by": "0" }
+  ]
+}

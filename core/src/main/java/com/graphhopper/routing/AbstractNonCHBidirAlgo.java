@@ -194,7 +194,7 @@ public abstract class AbstractNonCHBidirAlgo extends AbstractBidirAlgo implement
     protected double calcWeight(EdgeIteratorState iter, SPTEntry currEdge, boolean reverse) {
         // note that for node-based routing the weights will be wrong in case the weighting is returning non-zero
         // turn weights, see discussion in #1960
-        return GHUtility.calcWeightWithTurnWeightWithAccess(weighting, iter, reverse, currEdge.edge) + currEdge.getWeightOfVisitedPath();
+        return GHUtility.calcWeightWithTurnWeight(weighting, iter, reverse, currEdge.edge) + currEdge.getWeightOfVisitedPath();
     }
 
     @Override
@@ -211,7 +211,7 @@ public abstract class AbstractNonCHBidirAlgo extends AbstractBidirAlgo implement
     }
 
     protected boolean accept(EdgeIteratorState iter, int prevOrNextEdgeId) {
-        // for edge-based traversal we leave it for TurnWeighting to decide whether or not a u-turn is acceptable,
+        // for edge-based traversal we leave it for calcTurnWeight to decide whether or not a u-turn is acceptable,
         // but for node-based traversal we exclude such a turn for performance reasons already here
         if (!traversalMode.isEdgeBased() && iter.getEdge() == prevOrNextEdgeId)
             return false;

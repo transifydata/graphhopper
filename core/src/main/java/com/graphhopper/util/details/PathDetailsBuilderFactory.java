@@ -43,7 +43,16 @@ public class PathDetailsBuilderFactory {
             builders.add(new ConstantDetailsBuilder(LEG_DISTANCE, path.getDistance()));
         if (requestedPathDetails.contains(LEG_WEIGHT))
             builders.add(new ConstantDetailsBuilder(LEG_WEIGHT, path.getWeight()));
+        if (requestedPathDetails.contains(CHANGE_ANGLE))
+            builders.add(new ChangeAngleDetails(evl.getDecimalEncodedValue(Orientation.KEY)));
 
+        for (String key : requestedPathDetails) {
+            if (key.endsWith("_conditional"))
+                builders.add(new KVStringDetails(key));
+        }
+
+        if (requestedPathDetails.contains(MOTORWAY_JUNCTION))
+            builders.add(new KVStringDetails(MOTORWAY_JUNCTION));
         if (requestedPathDetails.contains(STREET_NAME))
             builders.add(new KVStringDetails(STREET_NAME));
         if (requestedPathDetails.contains(STREET_REF))
@@ -73,7 +82,8 @@ public class PathDetailsBuilderFactory {
             builders.add(new IntersectionDetails(graph, weighting));
 
         for (String pathDetail : requestedPathDetails) {
-            if (!evl.hasEncodedValue(pathDetail)) continue; // path details like "time" won't be found
+            if (!evl.hasEncodedValue(pathDetail))
+                continue; // path details like "time" won't be found
 
             EncodedValue ev = evl.getEncodedValue(pathDetail, EncodedValue.class);
             if (ev instanceof DecimalEncodedValue)
@@ -86,7 +96,8 @@ public class PathDetailsBuilderFactory {
                 builders.add(new StringDetails(pathDetail, (StringEncodedValue) ev));
             else if (ev instanceof IntEncodedValue)
                 builders.add(new IntDetails(pathDetail, (IntEncodedValue) ev));
-            else throw new IllegalArgumentException("unknown EncodedValue class " + ev.getClass().getName());
+            else
+                throw new IllegalArgumentException("unknown EncodedValue class " + ev.getClass().getName());
         }
 
         if (requestedPathDetails.size() > builders.size()) {

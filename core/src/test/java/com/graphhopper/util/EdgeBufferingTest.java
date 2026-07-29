@@ -1,42 +1,129 @@
 package com.graphhopper.util;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.Point;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * Tests for the fork's isochrone edge buffering: connected polylines are merged, then
+ * buffered in a metric (azimuthal equidistant) projection in parallel windows and unioned
+ * into a single polygon, returned in lon/lat.
+ */
 class EdgeBufferingTest {
 
-    @BeforeEach
-    void setUp() {
+    private static PointList line(double... latLonPairs) {
+        PointList pl = new PointList();
+        for (int i = 0; i < latLonPairs.length; i += 2)
+            pl.add(latLonPairs[i], latLonPairs[i + 1]);
+        return pl;
     }
 
-    @AfterEach
-    void tearDown() {
+    @Test
+    public void connectedLinesAreMerged() {
+        // A and B share an endpoint and must merge into one LineString; C is disjoint
+        PointList a = line(43.4700, -80.5400, 43.4710, -80.5390);
+        PointList b = line(43.4710, -80.5390, 43.4720, -80.5380);
+        PointList c = line(43.4800, -80.5300, 43.4810, -80.5290);
+
+        List<LineString> merged = EdgeBuffering.buildGeometryFromLines(
+                List.of(List.of(a, b, c)), false);
+
+        assertEquals(2, merged.size());
+        int totalPoints = merged.stream().mapToInt(LineString::getNumPoints).sum();
+        // merged A+B has 3 points (shared endpoint deduplicated), C keeps 2
+        assertEquals(5, totalPoints);
     }
 
-//    @Test
-//    public void t1() throws Exception {
-//        PointList pointList = new PointList();
-//        pointList.add(43.47459906714954, -80.54640749722667);
-//        pointList.add(43.47703385659298, -80.53985776969917);
-//
-//
-//        PointList pointList1 = new PointList();
-//        pointList1.add(43.47872641443335, -80.53512885325418);
-//        pointList1.add(43.4817632985735, -80.52618144585655);
-//
-//        PointList pointList2 = new PointList();
-//        pointList2.add(43.455883899827406, -80.50789905342697);
-//        pointList2.add(43.466839150046596, -80.51672285575728);
-//        EdgeBuffering eb = new EdgeBuffering(Arrays.asList(pointList, pointList1, pointList2));
-//        Geometry buffered = eb.buildEdgeBuffer(300.00);
-//        System.out.printf("%s\n", EdgeBuffering.toGeoJSON(buffered));
-//    }
+    @Test
+    public void bufferCoversInputGeometry() throws Exception {
+        // more than one WINDOW_SIZE (20) worth of disjoint segments so the parallel
+        // windowed buffering path is exercised
+        List<PointList> segments = new ArrayList<>();
+        for (int i = 0; i < 45; i++) {
+            double lat = 43.4000 + 0.002 * i;
+            segments.add(line(lat, -80.5400, lat, -80.5300));
+        }
+
+        EdgeBuffering eb = new EdgeBuffering(List.of(segments));
+        // NOTE: we verify through the GeoJSON output because buildEdgeBuffer converts the
+        // result back to lon/lat by mutating cached Coordinate objects in place; the
+        // returned Geometry's packed sequences and envelope still hold projected values,
+        // so JTS spatial predicates cannot be used on it directly.
+        List<Geometry> polygons = parseGeoJsonPolygons(eb.buildEdgeBufferGeoJSON(200.0));
+        assertFalse(polygons.isEmpty());
+
+        Geometry union = polygons.get(0);
+        for (int i = 1; i < polygons.size(); i++)
+            union = union.union(polygons.get(i));
+
+        // every input endpoint must be inside the 200m buffer (coordinates are lon/lat)
+        GeometryFactory gf = new GeometryFactory();
+        for (PointList segment : segments) {
+            for (int i = 0; i < segment.size(); i++) {
+                Point p = gf.createPoint(new Coordinate(segment.getLon(i), segment.getLat(i)));
+                assertTrue(union.covers(p), "buffer does not cover input point " + p);
+            }
+        }
+    }
+
+    // builds JTS polygons (exterior rings only) from a GeoJSON Polygon/MultiPolygon string
+    // and checks the coordinates are plausible lon/lat values
+    private static List<Geometry> parseGeoJsonPolygons(String geoJson) throws Exception {
+        JsonNode root = new ObjectMapper().readTree(geoJson);
+        GeometryFactory gf = new GeometryFactory();
+        List<Geometry> result = new ArrayList<>();
+        String type = root.get("type").asText();
+        JsonNode coords = root.get("coordinates");
+        List<JsonNode> polygons = new ArrayList<>();
+        if (type.equals("Polygon"))
+            polygons.add(coords);
+        else if (type.equals("MultiPolygon"))
+            coords.forEach(polygons::add);
+        else
+            fail("unexpected geometry type " + type);
+        for (JsonNode polygon : polygons) {
+            JsonNode ring = polygon.get(0); // exterior ring
+            Coordinate[] shell = new Coordinate[ring.size()];
+            for (int i = 0; i < ring.size(); i++) {
+                double lon = ring.get(i).get(0).asDouble();
+                double lat = ring.get(i).get(1).asDouble();
+                assertTrue(lon > -81.5 && lon < -79.5, "longitude out of range: " + lon);
+                assertTrue(lat > 42.5 && lat < 44.5, "latitude out of range: " + lat);
+                shell[i] = new Coordinate(lon, lat);
+            }
+            result.add(gf.createPolygon(shell));
+        }
+        return result;
+    }
+
+    @Test
+    public void disjointSegmentsProduceMultiPolygon() {
+        PointList near = line(43.4700, -80.5400, 43.4705, -80.5395);
+        PointList far = line(43.9000, -80.1000, 43.9005, -80.0995);
+        EdgeBuffering eb = new EdgeBuffering(List.of(List.of(near, far)));
+        Geometry buffered = eb.buildEdgeBuffer(100.0);
+        assertEquals(2, buffered.getNumGeometries(), "far-apart segments should stay separate polygons");
+    }
+
+    @Test
+    public void geoJsonSerialization() throws Exception {
+        PointList a = line(43.4700, -80.5400, 43.4710, -80.5390);
+        EdgeBuffering eb = new EdgeBuffering(List.of(List.of(a)));
+        String geoJson = eb.buildEdgeBufferGeoJSON(150.0);
+
+        JsonNode node = new ObjectMapper().readTree(geoJson);
+        assertTrue(node.has("type"));
+        assertTrue(node.get("type").asText().contains("Polygon"));
+        assertTrue(node.has("coordinates"));
+    }
 }

@@ -23,9 +23,9 @@ import org.locationtech.jts.geom.MultiLineString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.inject.Inject;
-import javax.ws.rs.*;
-import javax.ws.rs.core.*;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.*;
+import jakarta.ws.rs.core.*;
 import java.util.*;
 
 import static com.graphhopper.resources.RouteResource.removeLegacyParameters;
@@ -92,7 +92,7 @@ public class BatchSPTResource {
 
             QueryGraph queryGraph = QueryGraph.create(graph, snap);
 
-            TraversalMode traversalMode = profile.isTurnCosts() ? EDGE_BASED : NODE_BASED;
+            TraversalMode traversalMode = profile.hasTurnCosts() ? EDGE_BASED : NODE_BASED;
             ShortestPathTree shortestPathTree = new ShortestPathTree(queryGraph, queryGraph.wrapWeighting(weighting), reverseFlow, traversalMode);
             shortestPathTree.setIncludeOverextendedEdges(includeOverextended);
 

@@ -1,0 +1,12 @@
+// GraphHopper's bundled car.json with our distance_influence (was 70 in the pre-GH11 config,
+// where it lived inline in the profile; profiles cannot combine custom_model_files with an
+// inline custom_model, so it lives here instead).
+{
+  "distance_influence": 70,
+  "priority": [
+    { "if": "!car_access", "multiply_by": "0" }
+  ],
+  "speed": [
+    { "if": "true", "limit_to": "car_average_speed" }
+  ]
+}
