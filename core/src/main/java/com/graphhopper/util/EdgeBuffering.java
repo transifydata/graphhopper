@@ -134,11 +134,27 @@ public class EdgeBuffering {
             logger.info("Unioned " + buffered_geoms.size() + " buffers into " + unioned.getNumGeometries() + " geometries. Took " + sw.stop().getSeconds() + " seconds.");
         }
 
-        for (Coordinate c : unioned.getCoordinates()) {
-            Coordinate transformed = transformLatLongToNAD83(c, true);
-            c.x = transformed.x;
-            c.y = transformed.y;
-        }
+        // write the conversion through to the coordinate sequences (packed sequences hand
+        // out copies from getCoordinates(), so mutating those is unreliable) and let
+        // isGeometryChanged() refresh the cached envelopes
+        unioned.apply(new CoordinateSequenceFilter() {
+            @Override
+            public void filter(CoordinateSequence seq, int i) {
+                Coordinate transformed = transformLatLongToNAD83(new Coordinate(seq.getOrdinate(i, 0), seq.getOrdinate(i, 1)), true);
+                seq.setOrdinate(i, 0, transformed.x);
+                seq.setOrdinate(i, 1, transformed.y);
+            }
+
+            @Override
+            public boolean isDone() {
+                return false;
+            }
+
+            @Override
+            public boolean isGeometryChanged() {
+                return true;
+            }
+        });
 
         return unioned;
     };

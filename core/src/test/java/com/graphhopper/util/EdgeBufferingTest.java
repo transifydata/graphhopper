@@ -55,23 +55,17 @@ class EdgeBufferingTest {
         }
 
         EdgeBuffering eb = new EdgeBuffering(List.of(segments));
-        // NOTE: we verify through the GeoJSON output because buildEdgeBuffer converts the
-        // result back to lon/lat by mutating cached Coordinate objects in place; the
-        // returned Geometry's packed sequences and envelope still hold projected values,
-        // so JTS spatial predicates cannot be used on it directly.
-        List<Geometry> polygons = parseGeoJsonPolygons(eb.buildEdgeBufferGeoJSON(200.0));
-        assertFalse(polygons.isEmpty());
+        Geometry buffered = eb.buildEdgeBuffer(200.0);
+        assertFalse(buffered.isEmpty());
+        assertTrue(buffered.isValid());
 
-        Geometry union = polygons.get(0);
-        for (int i = 1; i < polygons.size(); i++)
-            union = union.union(polygons.get(i));
-
-        // every input endpoint must be inside the 200m buffer (coordinates are lon/lat)
+        // the returned geometry is in lon/lat with valid envelopes, so spatial predicates
+        // work directly: every input endpoint must be inside the 200m buffer
         GeometryFactory gf = new GeometryFactory();
         for (PointList segment : segments) {
             for (int i = 0; i < segment.size(); i++) {
                 Point p = gf.createPoint(new Coordinate(segment.getLon(i), segment.getLat(i)));
-                assertTrue(union.covers(p), "buffer does not cover input point " + p);
+                assertTrue(buffered.covers(p), "buffer does not cover input point " + p);
             }
         }
     }
@@ -125,5 +119,8 @@ class EdgeBufferingTest {
         assertTrue(node.has("type"));
         assertTrue(node.get("type").asText().contains("Polygon"));
         assertTrue(node.has("coordinates"));
+
+        // parses the polygons and validates the serialized coordinates are lon/lat
+        assertFalse(parseGeoJsonPolygons(geoJson).isEmpty());
     }
 }
