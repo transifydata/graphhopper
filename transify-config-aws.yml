@@ -32,7 +32,15 @@ graphhopper:
   # first eight are for path details / SPT columns; the rest are required by the
   # custom models above (GH 11 requires listing them once graph.encoded_values is set;
   # on a mismatch the server prints the exact line to paste here)
-  graph.encoded_values: average_slope, max_slope, surface, toll, track_type, road_class, road_environment, max_speed, car_access, car_average_speed, road_access, bus_access, bike_priority, bike_road_access, mtb_rating, hike_rating, country, bike_access, bike_average_speed, foot_access, foot_priority, foot_road_access, foot_average_speed
+  # bus_access carries restrictions (semicolon-separated; stock set + private) so it is
+  # true only where the bus/psv key itself grants access: with the stock set, private is
+  # NOT restricted and bus_access=true on every access=private driveway/parking aisle,
+  # which transit_car.json's "PRIVATE && !bus_access" rule would then open wholesale.
+  # With this set, access=private opens ONLY when tagged bus=yes/psv=yes etc. (bus-bay
+  # roads inside transit exchanges, e.g. UVic Exchange ways 275864152/63971443).
+  # Restrictions are applied by the parser at IMPORT time under the same EV name, so an
+  # existing graph-cache loads silently with stale values — a fresh import is required.
+  graph.encoded_values: average_slope, max_slope, surface, toll, track_type, road_class, road_environment, max_speed, car_access, car_average_speed, road_access, bus_access|restrictions=no;restricted;military;emergency;private, bike_priority, bike_road_access, mtb_rating, hike_rating, country, bike_access, bike_average_speed, foot_access, foot_priority, foot_road_access, foot_average_speed
 
   prepare.ch.threads: 8
   graph.elevation.provider: cgiar

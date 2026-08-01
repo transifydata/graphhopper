@@ -1,0 +1,65 @@
+graphhopper:
+  # INTERIM fast-build config: transit_car + walk only, no elevation, no turn
+  # costs -> all CH preps are node-based and run in parallel (~1h total import
+  # vs 5-10h for the full config). The full config is transify-config-aws.yml
+  # (adds car with turn restrictions, bike, and elevation/slope data).
+  # Build with:   ./aws/build-graph.sh --config config-fast.yml --deploy
+  # The serving task automatically uses whichever config the live graph was
+  # built with (the config name is stored next to the graph in S3).
+  datareader.file: "../north-america-latest.osm.pbf"
+  graph.location: graph-cache-north-america-fast
+
+  profiles:
+    - name: transit_car
+      # based on bus: busways allowed via bus_access, legal weight/width/height
+      # road limits removed, and NO turn_costs block = no turn restrictions
+      custom_model_files: [transit_car.json]
+    - name: walk
+      custom_model_files: [foot.json, walk_no_ferry.json]
+
+  custom_models.directory: custom_models
+
+  profiles_ch:
+    - profile: transit_car
+    - profile: walk
+  profiles_lm: []
+
+  # Same list as transify-config-aws.yml minus average_slope/max_slope, which
+  # require elevation (disabled here for speed; foot.json/transit_car.json/
+  # walk_no_ferry.json reference no slope values).
+  # bus_access restrictions MUST stay in sync with transify-config-aws.yml: the shared
+  # transit_car.json blocks private via "PRIVATE && !bus_access", which with a stock
+  # bus_access import (private unrestricted -> true on every private way) would open
+  # ALL private roads.  See the comment there.
+  graph.encoded_values: surface, toll, track_type, road_class, road_environment, max_speed, car_access, car_average_speed, road_access, bus_access|restrictions=no;restricted;military;emergency;private, bike_priority, bike_road_access, mtb_rating, hike_rating, country, bike_access, bike_average_speed, foot_access, foot_priority, foot_road_access, foot_average_speed
+
+  prepare.ch.threads: 8
+  # graph.elevation.provider intentionally unset -> no elevation downloads
+  prepare.min_network_size: 200
+  routing.non_ch.max_waypoint_distance: 1000000
+  import.osm.ignored_highways: []
+  graph.dataaccess.default_type: RAM_STORE
+
+server:
+  application_connectors:
+  - type: http
+    port: 8989
+  request_log:
+      appenders: []
+  admin_connectors:
+  - type: http
+    port: 8990
+    bind_host: localhost
+logging:
+  appenders:
+  - type: file
+    time_zone: UTC
+    current_log_filename: logs/graphhopper.log
+    log_format: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    archive: true
+    archived_log_filename_pattern: ./logs/graphhopper-%d.log.gz
+    archived_file_count: 30
+    never_block: true
+  - type: console
+    time_zone: UTC
+    log_format: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

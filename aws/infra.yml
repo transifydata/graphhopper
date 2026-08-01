@@ -1,0 +1,460 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  GraphHopper on ECS (EC2, Graviton) in us-east-2: internal ALB (not reachable
+  from the internet), S3 graph pipeline, and an ephemeral spot capacity
+  provider that scales 0 -> 1 -> 0 for graph imports.
+  Deploy: aws cloudformation deploy --region us-east-2 --stack-name graphhopper
+          --template-file aws/infra.yml --capabilities CAPABILITY_IAM
+
+Parameters:
+  # Defaults are this account's default VPC / subnets in us-east-2 (public
+  # subnets that auto-assign public IPs; security groups still allow no inbound,
+  # and the ALB is internal, so nothing is internet-reachable).
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-38884c51
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: subnet-b2ed3cdb,subnet-c09d7cbb,subnet-e77176ad
+  InstanceProfileName:
+    Type: String
+    Default: ecsInstanceRole # existing role/profile with AmazonEC2ContainerServiceforEC2Role
+  ExecutionRoleName:
+    Type: String
+    Default: ecsTaskExecutionRole # existing role with AmazonECSTaskExecutionRolePolicy
+  AllowedClientCidr:
+    Type: String
+    Default: ''
+    Description: Optional extra CIDR allowed to reach the ALB (the client SG is always allowed).
+
+  # --- Serving ---
+  # If the graph outgrows 64 GiB (check the import task's "graph-cache is ..."
+  # log line), override: ServeInstanceType=r8g.4xlarge ServeTaskMemoryMiB=120000
+  # ServeJavaOpts="-Xms100g -Xmx100g -XX:+UseZGC -XX:+ZGenerational"
+  ServeInstanceType:
+    Type: String
+    Default: m8g.4xlarge # 16 vCPU / 64 GiB Graviton4
+  ServeTaskMemoryMiB:
+    Type: Number
+    Default: 60000
+  ServeJavaOpts:
+    Type: String
+    Default: '-Xms48g -Xmx48g -XX:+UseZGC -XX:+ZGenerational'
+  ServeDesiredCount:
+    Type: Number
+    Default: 0
+    Description: >-
+      Bootstrap-only default. The service must be created with 0 tasks so stack
+      creation does not wait on a service that cannot become healthy before the
+      first graph exists in S3; build-graph.sh --deploy raises it to 1 (the
+      steady state: one instance, replaced automatically by the ASG if it dies).
+  ServeMaxInstances:
+    Type: Number
+    Default: 4
+  ServeDiskGiB:
+    Type: Number
+    Default: 200
+  GraphVersionPin:
+    Type: String
+    Default: ''
+    Description: Pin serving to a published graph version for rollback; empty follows 'latest'.
+
+  # --- Import (ephemeral instance, scaled 0 -> 1 -> 0 by ECS) ---
+  ImportInstanceType:
+    Type: String
+    Default: r8g.4xlarge # 16 vCPU / 128 GiB Graviton4
+  ImportTaskMemoryMiB:
+    Type: Number
+    Default: 122880
+  ImportJavaOpts:
+    Type: String
+    Default: '-Xms100g -Xmx100g -XX:+UseParallelGC'
+  ImportUseSpot:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false' # r8g.4xlarge spot proved flaky in us-east-2 (reclaim mid-import); a full build is only ~$7-9 on-demand
+  ImportDiskGiB:
+    Type: Number
+    Default: 400 # pbf + elevation cache + graph-cache + tar staging
+  PbfUrl:
+    Type: String
+    Default: https://download.geofabrik.de/north-america-latest.osm.pbf
+
+  EcsAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id
+    Description: ECS-optimized AL2023 arm64 AMI (resolved from SSM automatically).
+  AlbIdleTimeoutSeconds:
+    Type: Number
+    Default: 3600
+    Description: >-
+      /batch-spt sends no bytes until the whole computation finishes, so this
+      must exceed the longest expected batch (ALB max is 4000).
+
+Conditions:
+  UseSpot: !Equals [!Ref ImportUseSpot, 'true']
+  HasClientCidr: !Not [!Equals [!Ref AllowedClientCidr, '']]
+
+Resources:
+
+  # ---------- Storage / registry ----------
+
+  GraphsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-graphs-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: abort-incomplete-multipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  EcrRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref AWS::StackName # stack name must be lowercase
+
+  # Task role is stack-specific (S3 access to the graphs bucket only).
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: graphs-bucket-rw
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !GetAtt GraphsBucket.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload]
+                Resource: !Sub '${GraphsBucket.Arn}/*'
+
+  # ---------- Networking ----------
+
+  # Attach this SG to anything that calls GraphHopper (e.g. the
+  # transify-transit-routing-api Fargate service). It has no rules of its own;
+  # it is a marker the ALB trusts.
+  ClientSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Marker SG for GraphHopper clients; attach to caller services
+      VpcId: !Ref VpcId
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Internal ALB for GraphHopper
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ClientSecurityGroup
+
+  AlbIngressFromCidr:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasClientCidr
+    Properties:
+      GroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: !Ref AllowedClientCidr
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: GraphHopper ECS instances; only the ALB may reach 8989
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8989
+          ToPort: 8989
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  # ---------- Launch templates / ASGs / capacity providers ----------
+
+  ServeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref EcsAmiId
+        InstanceType: !Ref ServeInstanceType
+        IamInstanceProfile: {Name: !Ref InstanceProfileName}
+        SecurityGroupIds: [!Ref InstanceSecurityGroup]
+        MetadataOptions: {HttpTokens: required, HttpPutResponseHopLimit: 2}
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: !Ref ServeDiskGiB
+              Throughput: 500 # fast graph hydration from S3 at task start
+              DeleteOnTermination: true
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo ECS_CLUSTER=${Cluster} >> /etc/ecs/ecs.config
+
+  ImportLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref EcsAmiId
+        InstanceType: !Ref ImportInstanceType
+        IamInstanceProfile: {Name: !Ref InstanceProfileName}
+        SecurityGroupIds: [!Ref InstanceSecurityGroup]
+        MetadataOptions: {HttpTokens: required, HttpPutResponseHopLimit: 2}
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: !Ref ImportDiskGiB
+              Throughput: 500
+              DeleteOnTermination: true
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo ECS_CLUSTER=${Cluster} >> /etc/ecs/ecs.config
+            echo ECS_ENABLE_SPOT_INSTANCE_DRAINING=true >> /etc/ecs/ecs.config
+
+  ServeAsg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MinSize: '0'
+      MaxSize: !Ref ServeMaxInstances
+      VPCZoneIdentifier: !Ref SubnetIds
+      NewInstancesProtectedFromScaleIn: true
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ServeLaunchTemplate
+        Version: !GetAtt ServeLaunchTemplate.LatestVersionNumber
+      Tags:
+        - {Key: Name, Value: !Sub '${AWS::StackName}-serve', PropagateAtLaunch: true}
+
+  ImportAsg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MinSize: '0'
+      MaxSize: '1'
+      MaxInstanceLifetime: 86400 # hard 24h backstop: EC2 kills the import box no matter what
+      VPCZoneIdentifier: !Ref SubnetIds
+      NewInstancesProtectedFromScaleIn: false
+      MixedInstancesPolicy:
+        InstancesDistribution:
+          OnDemandPercentageAboveBaseCapacity: !If [UseSpot, 0, 100]
+          SpotAllocationStrategy: capacity-optimized
+        LaunchTemplate:
+          LaunchTemplateSpecification:
+            LaunchTemplateId: !Ref ImportLaunchTemplate
+            Version: !GetAtt ImportLaunchTemplate.LatestVersionNumber
+      Tags:
+        - {Key: Name, Value: !Sub '${AWS::StackName}-import', PropagateAtLaunch: true}
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref AWS::StackName
+
+  ServeCapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      Name: !Sub '${AWS::StackName}-serve-cp'
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref ServeAsg
+        ManagedTerminationProtection: ENABLED
+        ManagedScaling:
+          Status: ENABLED
+          TargetCapacity: 100
+
+  ImportCapacityProvider:
+    Type: AWS::ECS::CapacityProvider
+    Properties:
+      Name: !Sub '${AWS::StackName}-import-cp'
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref ImportAsg
+        ManagedTerminationProtection: DISABLED # allow scale-in to 0 after the task exits
+        ManagedScaling:
+          Status: ENABLED
+          TargetCapacity: 100
+
+  CapacityAssociations:
+    Type: AWS::ECS::ClusterCapacityProviderAssociations
+    Properties:
+      Cluster: !Ref Cluster
+      CapacityProviders:
+        - !Ref ServeCapacityProvider
+        - !Ref ImportCapacityProvider
+      DefaultCapacityProviderStrategy: []
+
+  # ---------- Task definitions ----------
+
+  ServeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}-serve'
+      RetentionInDays: 30
+
+  ImportLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}-import'
+      RetentionInDays: 30
+
+  ServeTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-serve'
+      NetworkMode: host
+      RequiresCompatibilities: [EC2]
+      Memory: !Ref ServeTaskMemoryMiB
+      ExecutionRoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ExecutionRoleName}'
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      Volumes:
+        - Name: data
+          Host: {SourcePath: /data}
+      ContainerDefinitions:
+        - Name: graphhopper
+          Image: !Sub '${EcrRepo.RepositoryUri}:latest'
+          Essential: true
+          MountPoints:
+            - {SourceVolume: data, ContainerPath: /data}
+          PortMappings:
+            - {ContainerPort: 8989, HostPort: 8989, Protocol: tcp}
+          Environment:
+            - {Name: MODE, Value: serve}
+            - {Name: S3_BUCKET, Value: !Ref GraphsBucket}
+            - {Name: JAVA_OPTS, Value: !Ref ServeJavaOpts}
+            - {Name: PBF_URL, Value: !Ref PbfUrl}
+            - {Name: GRAPH_VERSION, Value: !Ref GraphVersionPin}
+            - {Name: AWS_DEFAULT_REGION, Value: !Ref 'AWS::Region'}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ServeLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: serve
+
+  ImportTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-import'
+      NetworkMode: host
+      RequiresCompatibilities: [EC2]
+      Memory: !Ref ImportTaskMemoryMiB
+      ExecutionRoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ExecutionRoleName}'
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      Volumes:
+        - Name: data
+          Host: {SourcePath: /data}
+      ContainerDefinitions:
+        - Name: graphhopper
+          Image: !Sub '${EcrRepo.RepositoryUri}:latest'
+          Essential: true
+          MountPoints:
+            - {SourceVolume: data, ContainerPath: /data}
+          Environment:
+            - {Name: MODE, Value: import}
+            - {Name: S3_BUCKET, Value: !Ref GraphsBucket}
+            - {Name: JAVA_OPTS, Value: !Ref ImportJavaOpts}
+            - {Name: PBF_URL, Value: !Ref PbfUrl}
+            - {Name: AWS_DEFAULT_REGION, Value: !Ref 'AWS::Region'}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ImportLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: import
+
+  # ---------- Internal ALB + service ----------
+
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Type: application
+      Subnets: !Ref SubnetIds
+      SecurityGroups: [!Ref AlbSecurityGroup]
+      LoadBalancerAttributes:
+        - {Key: idle_timeout.timeout_seconds, Value: !Ref AlbIdleTimeoutSeconds}
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      Port: 8989
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      TargetGroupAttributes:
+        - {Key: deregistration_delay.timeout_seconds, Value: '30'}
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  ServeService:
+    Type: AWS::ECS::Service
+    DependsOn: [HttpListener, CapacityAssociations]
+    Properties:
+      ServiceName: !Sub '${AWS::StackName}-serve'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref ServeTaskDef
+      DesiredCount: !Ref ServeDesiredCount
+      CapacityProviderStrategy:
+        - CapacityProvider: !Ref ServeCapacityProvider
+          Weight: 1
+      HealthCheckGracePeriodSeconds: 900 # graph download + RAM_STORE load takes minutes
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      LoadBalancers:
+        - ContainerName: graphhopper
+          ContainerPort: 8989
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  GraphsBucket:
+    Value: !Ref GraphsBucket
+  EcrRepositoryUri:
+    Value: !GetAtt EcrRepo.RepositoryUri
+  AlbDnsName:
+    Value: !GetAtt Alb.DNSName
+  GraphhopperUrl:
+    Description: Internal base URL for clients inside the VPC (set as GRAPHHOPPER_URL)
+    Value: !Sub 'http://${Alb.DNSName}'
+  ServeServiceName:
+    Value: !GetAtt ServeService.Name
+  ImportTaskDefFamily:
+    Value: !Sub '${AWS::StackName}-import'
+  ImportCapacityProviderName:
+    Value: !Ref ImportCapacityProvider
+  ClientSecurityGroupId:
+    Description: Attach to services that call GraphHopper (e.g. the routing API Fargate service)
+    Value: !Ref ClientSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-client-sg'
