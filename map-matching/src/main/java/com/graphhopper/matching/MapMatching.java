@@ -71,6 +71,11 @@ public class MapMatching {
     private final LocationIndexTree locationIndex;
     private double measurementErrorSigma = 10.0;
     private double transitionProbabilityBeta = 2.0;
+    // Half-width of the candidate search box, decoupled from sigma (-1: the box is
+    // +-sigma, the stock behaviour).  A GTFS shape drawn along the curb of a wide
+    // road sits 10-14 m from the centreline; with sigma 10 that centreline is not
+    // even a candidate when a parking aisle lies 3 m from the point.
+    private double candidateSearchRadius = -1.0;
     private final DistanceCalc distanceCalc = new DistancePlaneProjection();
     private QueryGraph queryGraph;
 
@@ -195,6 +200,23 @@ public class MapMatching {
         this.measurementErrorSigma = measurementErrorSigma;
     }
 
+    /**
+     * Half-width [m] of the box in which candidate edges are searched around every
+     * observation.  Sigma still drives the emission probabilities and the observation
+     * filtering; values at or below sigma (including the default -1) keep the stock
+     * behaviour, where the box is +-sigma.
+     */
+    public void setCandidateSearchRadius(double candidateSearchRadius) {
+        this.candidateSearchRadius = candidateSearchRadius;
+    }
+
+    /**
+     * The effective half-width [m] of the candidate search box.
+     */
+    public double getCandidateSearchRadius() {
+        return Math.max(measurementErrorSigma, candidateSearchRadius);
+    }
+
     public MatchResult match(List<Observation> observations) {
         List<Observation> filteredObservations = filterObservations(observations);
         statistics.put("filteredObservations", filteredObservations.size());
@@ -276,8 +298,9 @@ public class MapMatching {
     }
 
     public List<Snap> findCandidateSnaps(final double queryLat, final double queryLon) {
-        double rLon = (measurementErrorSigma * 360.0 / DistanceCalcEarth.DIST_EARTH.calcCircumference(queryLat));
-        double rLat = measurementErrorSigma / DistanceCalcEarth.METERS_PER_DEGREE;
+        double radius = getCandidateSearchRadius();
+        double rLon = (radius * 360.0 / DistanceCalcEarth.DIST_EARTH.calcCircumference(queryLat));
+        double rLat = radius / DistanceCalcEarth.METERS_PER_DEGREE;
         Envelope envelope = new Envelope(queryLon, queryLon, queryLat, queryLat);
         for (int i = 0; i < 50; i++) {
             envelope.expandBy(rLon, rLat);

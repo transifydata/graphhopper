@@ -29,6 +29,7 @@ import com.graphhopper.matching.MapMatching;
 import com.graphhopper.matching.MatchResult;
 import com.graphhopper.matching.Observation;
 import com.graphhopper.routing.TestProfiles;
+import com.graphhopper.storage.index.Snap;
 import com.graphhopper.util.*;
 import com.graphhopper.util.shapes.GHPoint;
 import org.junit.jupiter.api.AfterAll;
@@ -297,6 +298,47 @@ public class MapMatchingTest {
         mapMatching.setMeasurementErrorSigma(10);
         mr = mapMatching.match(GpxConversions.getEntries(gpx.trk.get(0)));
         assertEquals(Arrays.asList("Gustav-Adolf-Straße", "Funkenburgstraße"), fetchStreets(mr.getEdgeMatches()));
+    }
+
+    /**
+     * The candidate search box is +-sigma unless a larger candidate radius is set:
+     * the radius widens the box only, sigma still drives the emission penalty and
+     * the observation filtering, so the wider box changes nothing where the
+     * nearest road is the right one.
+     */
+    @ParameterizedTest
+    @ArgumentsSource(FixtureProvider.class)
+    public void testCandidateSearchRadius(PMap hints) {
+        MapMatching mapMatching = MapMatching.fromGraphHopper(graphHopper, hints);
+        double lat = 51.358735, lon = 12.360574;    // on Platnerstraße, see testDoWork
+        mapMatching.setMeasurementErrorSigma(10);
+        assertEquals(10, mapMatching.getCandidateSearchRadius());
+        List<Integer> stock = candidateEdges(mapMatching.findCandidateSnaps(lat, lon));
+
+        // at or below sigma the radius has no effect
+        mapMatching.setCandidateSearchRadius(-1);
+        assertEquals(stock, candidateEdges(mapMatching.findCandidateSnaps(lat, lon)));
+        mapMatching.setCandidateSearchRadius(5);
+        assertEquals(stock, candidateEdges(mapMatching.findCandidateSnaps(lat, lon)));
+
+        // above sigma the box grows and keeps every stock candidate
+        mapMatching.setCandidateSearchRadius(100);
+        assertEquals(100, mapMatching.getCandidateSearchRadius());
+        List<Integer> wide = candidateEdges(mapMatching.findCandidateSnaps(lat, lon));
+        assertTrue(wide.size() > stock.size(), "wide box " + wide + " vs stock " + stock);
+        assertTrue(wide.containsAll(stock));
+
+        // the match itself still lands on the nearest street
+        ResponsePath route = graphHopper.route(new GHRequest(
+                new GHPoint(51.358735, 12.360574),
+                new GHPoint(51.358594, 12.360032))
+                .setProfile("my_profile")).getBest();
+        MatchResult mr = mapMatching.match(createRandomGPXEntriesAlongRoute(route));
+        assertEquals(Arrays.asList("Platnerstraße"), fetchStreets(mr.getEdgeMatches()));
+    }
+
+    private static List<Integer> candidateEdges(List<Snap> snaps) {
+        return snaps.stream().map(s -> s.getClosestEdge().getEdge()).sorted().collect(Collectors.toList());
     }
 
     static List<String> fetchStreets(List<EdgeMatch> emList) {
